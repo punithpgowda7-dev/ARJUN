@@ -38,6 +38,14 @@ class GitHubPromotionResult:
     branch_url: str
 
 
+@dataclass(frozen=True, slots=True)
+class GitHubRepositoryCreation:
+    """Identity of a repository created for a new Arjun project."""
+
+    repository: str
+    default_branch: str
+
+
 class GitHubService:
     """Perform safe branch creation and file updates without blocking Telegram."""
 
@@ -181,6 +189,69 @@ class GitHubService:
     async def verify_connection(self) -> str:
         """Verify repository access without touching any remote state."""
         return await asyncio.to_thread(lambda: self._get_repository().full_name)
+
+    def _create_repository(
+        self,
+        name: str,
+        description: str,
+        private: bool,
+    ) -> GitHubRepositoryCreation:
+        """Create and initialize a repository under the configured GitHub owner."""
+        owner, _ = self.settings.github_repo.split("/", 1)
+        authenticated_user = self.client.get_user()
+        if authenticated_user.login.casefold() == owner.casefold():
+            repository = authenticated_user.create_repo(
+                name=name,
+                description=description[:350],
+                private=private,
+                auto_init=True,
+            )
+        else:
+            organization = self.client.get_organization(owner)
+            repository = organization.create_repo(
+                name=name,
+                description=description[:350],
+                private=private,
+                auto_init=True,
+            )
+        return GitHubRepositoryCreation(
+            repository=repository.full_name,
+            default_branch=repository.default_branch or self.settings.default_branch,
+        )
+
+    async def create_repository(
+        self,
+        *,
+        name: str,
+        description: str,
+        private: bool,
+    ) -> GitHubRepositoryCreation:
+        """Create a new initialized repository without blocking the Telegram loop."""
+        return await asyncio.to_thread(self._create_repository, name, description, private)
+
+    def _list_accessible_repositories(self) -> tuple[GitHubRepositoryCreation, ...]:
+        """List bounded repository metadata visible to the authenticated GitHub user."""
+        repositories = self.client.get_user().get_repos(
+            affiliation="owner,collaborator,organization_member",
+            type="all",
+            sort="updated",
+            direction="desc",
+        )
+        found: list[GitHubRepositoryCreation] = []
+        for repository in repositories:
+            found.append(
+                GitHubRepositoryCreation(
+                    repository=repository.full_name,
+                    default_branch=repository.default_branch or self.settings.default_branch,
+                )
+            )
+            if len(found) >= 200:
+                break
+        return tuple(found)
+
+    async def list_accessible_repositories(self) -> tuple[GitHubRepositoryCreation, ...]:
+        """Discover existing repositories without changing GitHub state."""
+        return await asyncio.to_thread(self._list_accessible_repositories)
 
     async def repository_context(self) -> str:
         """Fetch repository structure without changing remote state."""

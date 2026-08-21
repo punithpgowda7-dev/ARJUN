@@ -1,6 +1,6 @@
 # Arjun — Autonomous Telegram Developer Bot
 
-Arjun is a Telegram-based autonomous software delivery agent. Send a text or voice request such as “build a full-stack booking app” or “update the authentication flow in my existing app”; it reads the configured repository, plans the architecture, generates complete code, reviews it, creates its working branch, runs a remote Vercel build, promotes the verified commit to production, and returns the live URL.
+Arjun is a Telegram-based autonomous software delivery agent. Send a text or voice request such as “build a full-stack booking app” or “update the authentication flow in my existing app”; it routes the request to a new or registered project, creates a new GitHub repository when needed, plans the architecture, generates complete code, reviews it, creates its working branch, runs a remote Vercel build, promotes the verified commit to production, and returns the live URL.
 
 ## What it does
 
@@ -18,6 +18,13 @@ Arjun is a Telegram-based autonomous software delivery agent. Send a text or voi
 12. Serializes continuous commands, remembers verified task outcomes, and stores recurring reviewer/Vercel failures as durable repair lessons.
 13. Detects required application environment variables, asks for missing values in Telegram, encrypts them at rest, and syncs them directly to Vercel.
 14. Pauses for material technology choices; accepts an option, or compares the options automatically when you reply `DO`.
+15. Maintains a durable project registry so each new project keeps its own GitHub repository and Vercel project, while edits stay inside the selected old project.
+
+### New projects versus existing projects
+
+Arjun routes every request before it reads files. A request such as “build a new expense tracker” creates a new initialized private GitHub repository under the owner in `GITHUB_REPO`, registers it, creates/links a Vercel project for that repository, commits the implementation, remote-tests it, and sends the new production URL. A request such as “update my expense tracker login” selects the registered `expense-tracker` project and commits/deploys into that same repository and Vercel project. Arjun also performs bounded read-only discovery of repositories accessible to the GitHub token, so an older repository that was not created by Arjun can be selected and registered. If an edit is still not unambiguous, Arjun asks which project to use instead of guessing.
+
+`GITHUB_AUTO_CREATE_REPOSITORIES=true` and the GitHub token must have permission to create repositories. `VERCEL_AUTO_CREATE_PROJECT=true` and one-time Vercel/GitHub authorization are still required for automatic Vercel project linking. The registry is stored in `ARJUN_STATE_DB_PATH`, so the cloud worker must use persistent storage.
 
 The bot does not execute generated code on the worker. Vercel is the isolated remote build/deployment validator; the reviewer is an AI quality gate. No agent can safely invent private credentials, so Arjun either reads explicitly configured worker secrets or requests missing application variables interactively through Telegram.
 

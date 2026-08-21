@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from services.github_service import GitHubService, GitHubWriteResult
 from services.secret_service import SecretStore, SecretStoreError
 from services.memory_service import MemoryService
+from services.project_service import ProjectManager, ProjectRuntime
 from services.vercel_service import VercelDeploymentResult, VercelError, VercelService
 
 from .coder import CoderAgent, CoderOutput
@@ -48,6 +49,7 @@ class Orchestrator:
         vercel: VercelService | None = None,
         memory: MemoryService | None = None,
         secrets: SecretStore | None = None,
+        project_manager: ProjectManager | None = None,
     ) -> None:
         self.planner = planner
         self.coder = coder
@@ -56,6 +58,7 @@ class Orchestrator:
         self.vercel = vercel
         self.memory = memory
         self.secrets = secrets
+        self.project_manager = project_manager
         # GitHub branch updates and Vercel promotion are repository-wide state
         # changes. Queue requests so continuous Telegram messages cannot race.
         self._workflow_lock = asyncio.Lock()
@@ -76,49 +79,82 @@ class Orchestrator:
         if queued and progress is not None:
             await progress("⏳ Another build is using this repository. Your command is queued safely...")
         async with self._workflow_lock:
-            task_id = None
-            memory_context = ""
-            if self.memory is not None:
-                task_id = await self.memory.start_task(request, user_id)
-                memory_context = await self.memory.context()
+            runtime: ProjectRuntime | None = None
+            original_services = (self.github, self.vercel, self.memory, self.secrets)
             try:
-                result = await self._run(
-                    request,
-                    progress=progress,
-                    memory_context=memory_context,
-                    user_id=user_id,
-                    ask_user=ask_user,
-                )
-            except Exception as error:
+                if self.project_manager is not None:
+                    try:
+                        runtime = await self.project_manager.runtime_for(
+                            request,
+                            user_id=user_id,
+                            ask_user=ask_user,
+                        )
+                    except Exception as error:
+                        raise OrchestrationError(
+                            f"Project routing or automatic repository creation failed: {error}"
+                        ) from error
+                    self.github = runtime.github
+                    self.vercel = runtime.vercel
+                    self.memory = runtime.memory
+                    self.secrets = runtime.secrets
+
+                task_id = None
+                memory_context = ""
+                if self.memory is not None:
+                    task_id = await self.memory.start_task(request, user_id)
+                    memory_context = await self.memory.context()
+                try:
+                    result = await self._run(
+                        request,
+                        progress=progress,
+                        memory_context=memory_context,
+                        user_id=user_id,
+                        ask_user=ask_user,
+                    )
+                except Exception as error:
+                    if self.memory is not None and task_id is not None:
+                        await self.memory.finish_task(
+                            task_id,
+                            status="failed",
+                            summary=str(error),
+                        )
+                    raise
                 if self.memory is not None and task_id is not None:
+                    if (
+                        runtime is not None
+                        and self.project_manager is not None
+                        and self.vercel.settings.vercel_project_id
+                    ):
+                        await self.project_manager.registry.update_vercel(
+                            runtime.record.key,
+                            self.vercel.settings.vercel_project_id,
+                            self.vercel.settings.vercel_project_name,
+                        )
+                    deployment_url = result.deployment.url if result.deployment else ""
                     await self.memory.finish_task(
                         task_id,
-                        status="failed",
-                        summary=str(error),
+                        status="succeeded",
+                        summary="Verified by reviewer and remote deployment smoke test",
+                        commit_url=result.github.commit_url,
+                        deployment_url=deployment_url,
+                        debug_attempts=result.debug_attempts,
                     )
-                raise
-            if self.memory is not None and task_id is not None:
-                deployment_url = result.deployment.url if result.deployment else ""
-                await self.memory.finish_task(
-                    task_id,
-                    status="succeeded",
-                    summary="Verified by reviewer and remote deployment smoke test",
-                    commit_url=result.github.commit_url,
-                    deployment_url=deployment_url,
-                    debug_attempts=result.debug_attempts,
-                )
-                await self.memory.remember_fact(
-                    "last_verified_task",
-                    request.strip(),
-                    "successful GitHub commit + Vercel verification",
-                )
-                if result.deployment and result.deployment.url:
                     await self.memory.remember_fact(
-                        "last_verified_deployment",
-                        result.deployment.url,
-                        "successful Vercel deployment + smoke test",
+                        "last_verified_task",
+                        request.strip(),
+                        "successful GitHub commit + Vercel verification",
                     )
-            return result
+                    if result.deployment and result.deployment.url:
+                        await self.memory.remember_fact(
+                            "last_verified_deployment",
+                            result.deployment.url,
+                            "successful Vercel deployment + smoke test",
+                        )
+                return result
+            finally:
+                if runtime is not None:
+                    await runtime.close()
+                    self.github, self.vercel, self.memory, self.secrets = original_services
 
     async def _run(
         self,

@@ -22,7 +22,7 @@ class SecretStore:
 
     _key_pattern = re.compile(r"^[A-Z][A-Z0-9_]{1,127}$")
 
-    def __init__(self, database_path: str, master_key: str) -> None:
+    def __init__(self, database_path: str, master_key: str, scope: str = "__global__") -> None:
         if not master_key:
             self._cipher: Fernet | None = None
         else:
@@ -33,6 +33,7 @@ class SecretStore:
                     "ARJUN_SECRET_KEY is invalid; generate a Fernet key and set it once on the worker"
                 ) from error
         self.database_path = database_path
+        self.scope = scope
         if database_path != ":memory:":
             Path(database_path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
@@ -44,6 +45,18 @@ class SecretStore:
 
     def _initialize(self) -> None:
         with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS encrypted_secrets_v2 (
+                    scope TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    ciphertext BLOB NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(scope, key)
+                )
+                """
+            )
+            # Keep a compatibility table so old installations can be read safely.
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS encrypted_secrets (
@@ -78,8 +91,13 @@ class SecretStore:
             return True
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT 1 FROM encrypted_secrets WHERE key = ?", (key,)
+                "SELECT 1 FROM encrypted_secrets_v2 WHERE scope = ? AND key = ?",
+                (self.scope, key),
             ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    "SELECT 1 FROM encrypted_secrets WHERE key = ?", (key,)
+                ).fetchone()
         return row is not None
 
     async def get(self, key: str) -> str | None:
@@ -92,8 +110,14 @@ class SecretStore:
             return runtime_value
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT ciphertext FROM encrypted_secrets WHERE key = ?", (key,)
+                "SELECT ciphertext FROM encrypted_secrets_v2 WHERE scope = ? AND key = ?",
+                (self.scope, key),
             ).fetchone()
+            if row is None:
+                # Backward-compatible read of the pre-project-scoped store.
+                row = connection.execute(
+                    "SELECT ciphertext FROM encrypted_secrets WHERE key = ?", (key,)
+                ).fetchone()
         if row is None:
             return None
         try:
@@ -128,13 +152,13 @@ class SecretStore:
                 ciphertext = cipher.encrypt(value.strip().encode("utf-8"))
                 connection.execute(
                     """
-                    INSERT INTO encrypted_secrets(key, ciphertext, updated_at)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(key) DO UPDATE SET
+                    INSERT INTO encrypted_secrets_v2(scope, key, ciphertext, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(scope, key) DO UPDATE SET
                         ciphertext = excluded.ciphertext,
                         updated_at = excluded.updated_at
                     """,
-                    (key, ciphertext, now),
+                    (self.scope, key, ciphertext, now),
                 )
                 saved.append(key)
         return tuple(saved)

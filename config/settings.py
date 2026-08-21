@@ -40,6 +40,8 @@ class Settings(BaseModel):
     state_db_path: str = Field(default="data/arjun.sqlite3", min_length=1)
     arjun_secret_key: str = ""
     question_timeout_seconds: int = Field(default=900, ge=60, le=3600)
+    github_auto_create_repositories: bool = True
+    github_new_repo_private: bool = True
 
     @field_validator("github_repo")
     @classmethod
@@ -119,6 +121,8 @@ class Settings(BaseModel):
             state_db_path=os.getenv("ARJUN_STATE_DB_PATH", "data/arjun.sqlite3"),
             arjun_secret_key=os.getenv("ARJUN_SECRET_KEY", ""),
             question_timeout_seconds=integer("ARJUN_QUESTION_TIMEOUT_SECONDS", 900),
+            github_auto_create_repositories=boolean("GITHUB_AUTO_CREATE_REPOSITORIES", True),
+            github_new_repo_private=boolean("GITHUB_NEW_REPO_PRIVATE", True),
         )
 
 

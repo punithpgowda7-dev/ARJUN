@@ -14,6 +14,7 @@ from agents.reviewer import ReviewerAgent
 from config.settings import get_settings
 from services.github_service import GitHubService
 from services.memory_service import MemoryService
+from services.project_service import ProjectManager
 from services.secret_service import SecretStore
 from services.telegram_handler import TelegramHandler
 from services.vercel_service import VercelService
@@ -30,8 +31,18 @@ def build_application() -> tuple[Application, BaseAgent, GitHubService]:
     github = GitHubService(settings)
     memory = MemoryService(settings.state_db_path, settings.github_repo)
     secrets = SecretStore(settings.state_db_path, settings.arjun_secret_key)
+    project_manager = ProjectManager(settings, base_agent)
     vercel = VercelService(settings)
-    orchestrator = Orchestrator(planner, coder, reviewer, github, vercel, memory, secrets)
+    orchestrator = Orchestrator(
+        planner,
+        coder,
+        reviewer,
+        github,
+        vercel,
+        memory,
+        secrets,
+        project_manager,
+    )
     handler = TelegramHandler(settings, orchestrator, VoiceTranscriber(base_agent))
 
     async def shutdown(_: Application) -> None:
