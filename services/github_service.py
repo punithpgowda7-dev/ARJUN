@@ -15,6 +15,7 @@ from config.settings import Settings
 if TYPE_CHECKING:
     from agents.coder import GeneratedFile
 
+
 @dataclass(frozen=True, slots=True)
 class GitHubWriteResult:
     """Links returned after a successful GitHub write."""
@@ -146,7 +147,6 @@ class GitHubService:
 
         for generated in files:
             path = self._safe_path(generated.filepath)
-            # Refresh the target ref immediately before reading and writing.
             branch = repo.get_branch(self.settings.agent_working_branch)
             try:
                 existing = repo.get_contents(path, ref=self.settings.agent_working_branch)
@@ -231,23 +231,26 @@ class GitHubService:
 
     def _list_accessible_repositories(self) -> tuple[GitHubRepositoryCreation, ...]:
         """List bounded repository metadata visible to the authenticated GitHub user."""
-        repositories = self.client.get_user().get_repos(
-            affiliation="owner,collaborator,organization_member",
-            type="all",
-            sort="updated",
-            direction="desc",
-        )
-        found: list[GitHubRepositoryCreation] = []
-        for repository in repositories:
-            found.append(
-                GitHubRepositoryCreation(
-                    repository=repository.full_name,
-                    default_branch=repository.default_branch or self.settings.default_branch,
-                )
+        try:
+            # Removed 'type="all"' to prevent the GitHub 422 API conflict with affiliation
+            repositories = self.client.get_user().get_repos(
+                affiliation="owner,collaborator,organization_member",
+                sort="updated",
+                direction="desc",
             )
-            if len(found) >= 200:
-                break
-        return tuple(found)
+            found: list[GitHubRepositoryCreation] = []
+            for repository in repositories:
+                found.append(
+                    GitHubRepositoryCreation(
+                        repository=repository.full_name,
+                        default_branch=repository.default_branch or self.settings.default_branch,
+                    )
+                )
+                if len(found) >= 200:
+                    break
+            return tuple(found)
+        except Exception:
+            return ()
 
     async def list_accessible_repositories(self) -> tuple[GitHubRepositoryCreation, ...]:
         """Discover existing repositories without changing GitHub state."""
