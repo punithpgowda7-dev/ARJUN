@@ -1,0 +1,133 @@
+"""Shared Gemini client wrapper and structured-response primitives."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import random
+from collections.abc import Sequence
+from typing import Any, TypeVar
+
+from google import genai
+from google.genai import types
+from pydantic import BaseModel
+
+from config.settings import Settings
+from utils.parser import parse_json_response
+
+logger = logging.getLogger(__name__)
+ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+class GeminiAgentError(RuntimeError):
+    """Raised when Gemini cannot produce a usable response."""
+
+
+class BaseAgent:
+    """Base class for agents with retrying text and multimodal generation."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.client = genai.Client(api_key=settings.gemini_api_key)
+        self._closed = False
+
+    async def close(self) -> None:
+        """Close the underlying async and sync HTTP clients."""
+        if self._closed:
+            return
+        await self.client.aio.aclose()
+        self.client.close()
+        self._closed = True
+
+    @staticmethod
+    def _is_retryable(error: BaseException) -> bool:
+        """Identify transient provider failures without coupling to one SDK error class."""
+        status = getattr(error, "status_code", None) or getattr(error, "code", None)
+        text = str(error).lower()
+        return status in {408, 409, 425, 429, 500, 502, 503, 504} or any(
+            marker in text
+            for marker in ("429", "resource_exhausted", "rate limit", "temporarily unavailable")
+        )
+
+    async def generate_text(
+        self,
+        contents: Any,
+        *,
+        system_instruction: str,
+        temperature: float = 0.2,
+        attempts: int = 4,
+        response_mime_type: str | None = None,
+        response_schema: Any = None,
+    ) -> str:
+        """Generate text with exponential backoff and jitter for transient failures."""
+        last_error: BaseException | None = None
+        for attempt in range(attempts):
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=self.settings.gemini_model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=temperature,
+                        response_mime_type=response_mime_type,
+                        response_schema=response_schema,
+                    ),
+                )
+                text = (response.text or "").strip()
+                if not text:
+                    raise GeminiAgentError("Gemini returned an empty response")
+                return text
+            except Exception as error:  # SDK errors differ across releases.
+                last_error = error
+                if attempt == attempts - 1 or not self._is_retryable(error):
+                    break
+                delay = min(30.0, 2**attempt) + random.uniform(0.0, 0.75)
+                logger.warning("Transient Gemini error; retrying in %.2fs", delay)
+                await asyncio.sleep(delay)
+        raise GeminiAgentError("Gemini request failed") from last_error
+
+    async def generate_json(
+        self,
+        contents: Any,
+        *,
+        system_instruction: str,
+        response_model: type[ModelT],
+        temperature: float = 0.1,
+    ) -> ModelT:
+        """Generate, extract, and validate a JSON response against a Pydantic model."""
+        schema = response_model.model_json_schema()
+        instruction = (
+            f"{system_instruction}\n\nReturn only valid JSON matching this schema:\n{schema}"
+        )
+        raw = await self.generate_text(
+            contents,
+            system_instruction=instruction,
+            temperature=temperature,
+            response_mime_type="application/json",
+            response_schema=response_model,
+        )
+        try:
+            return response_model.model_validate(parse_json_response(raw))
+        except Exception as error:
+            raise GeminiAgentError(
+                f"Gemini returned JSON that does not match {response_model.__name__}"
+            ) from error
+
+    async def generate_audio_text(self, audio_bytes: bytes, prompt: str) -> str:
+        """Interpret an in-memory OGG voice note as a developer task."""
+        if not audio_bytes:
+            raise GeminiAgentError("The voice message was empty")
+        contents: Sequence[Any] = [
+            types.Part.from_bytes(data=audio_bytes, mime_type="audio/ogg"),
+            prompt,
+        ]
+        return await self.generate_text(
+            contents,
+            system_instruction=(
+                "You are a careful speech-to-text and intent extraction service. "
+                "Transcribe the audio and rewrite it as one precise developer task. "
+                "Return only the task text. If there is no discernible speech, return "
+                "the exact marker NO_SPEECH. Do not invent requirements."
+            ),
+            temperature=0.0,
+        )
