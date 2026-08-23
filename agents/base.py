@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 from collections.abc import Sequence
 from typing import Any, TypeVar
 
@@ -57,6 +58,22 @@ class BaseAgent:
     def _status_code(error: BaseException) -> int | str | None:
         """Extract a provider status without printing provider response bodies."""
         return getattr(error, "status_code", None) or getattr(error, "code", None)
+
+    @staticmethod
+    def _retry_delay(error: BaseException, attempt: int) -> float:
+        """Respect Gemini's retry hint while keeping one request bounded."""
+        fallback = min(30.0, 2**attempt) + random.uniform(0.0, 0.75)
+        text = str(error)
+        match = re.search(
+            r"(?:retry(?:\s+after)?|retryDelay)\D{0,20}(\d+(?:\.\d+)?)\s*s",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            return fallback
+        # A provider can report a daily reset in its body. Do not freeze the
+        # Telegram worker for hours; short rate limits are retried automatically.
+        return min(60.0, max(fallback, float(match.group(1))))
 
     @classmethod
     def _safe_failure_detail(cls, error: BaseException) -> tuple[int | str | None, str]:
@@ -112,7 +129,7 @@ class BaseAgent:
                 last_error = error
                 if attempt == attempts - 1 or not self._is_retryable(error):
                     break
-                delay = min(30.0, 2**attempt) + random.uniform(0.0, 0.75)
+                delay = self._retry_delay(error, attempt)
                 logger.warning("Transient Gemini error; retrying in %.2fs", delay)
                 await asyncio.sleep(delay)
         status, detail = self._safe_failure_detail(last_error or RuntimeError("unknown provider error"))
