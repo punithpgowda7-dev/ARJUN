@@ -26,6 +26,9 @@ AskUserCallback = Callable[[str, bool], Awaitable[str]]
 class OrchestrationError(RuntimeError):
     """Raised when a task cannot safely reach GitHub."""
 
+class ChatResponse(RuntimeError):
+    """Raised when the user makes conversation instead of a coding task."""
+
 
 @dataclass(frozen=True, slots=True)
 class OrchestrationResult:
@@ -89,6 +92,8 @@ class Orchestrator:
                             user_id=user_id,
                             ask_user=ask_user,
                         )
+                    except (OrchestrationError, ChatResponse):
+                        raise
                     except Exception as error:
                         raise OrchestrationError(
                             f"Project routing or automatic repository creation failed: {error}"

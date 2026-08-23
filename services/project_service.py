@@ -248,8 +248,8 @@ class ProjectManager:
                     default_branch=discovered_match.default_branch,
                 )
         if route.mode == "chat":
-            from agents.orchestrator import OrchestrationError
-            raise OrchestrationError(route.reason)
+            from agents.orchestrator import ChatResponse
+            raise ChatResponse(route.reason)
             
         if route.mode == "existing":
             if record is None:

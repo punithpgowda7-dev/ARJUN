@@ -10,7 +10,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from agents.base import LLMAgentError
-from agents.orchestrator import OrchestrationError, Orchestrator
+from agents.orchestrator import OrchestrationError, Orchestrator, ChatResponse
 from config.settings import Settings
 from services.interaction_service import InteractionBroker, InteractionTimeout
 from services.memory_service import MemoryService
@@ -100,6 +100,8 @@ class TelegramHandler:
                 await status.edit_text("✅ Answer received. Continuing the build...")
                 return
             await self._run_task(update, request, status_message=status, voice_reply=True)
+        except ChatResponse as response:
+            await status.edit_text(str(response))
         except (LLMAgentError, OrchestrationError, InteractionTimeout) as error:
             logger.exception("Voice task failed")
             await status.edit_text(f"❌ Task failed: {error}")
@@ -224,6 +226,8 @@ class TelegramHandler:
             if github.file_urls:
                 lines.append("Files:\n" + "\n".join(f"• {url}" for url in github.file_urls))
             await status.edit_text("\n".join(lines))
+        except ChatResponse as response:
+            await status.edit_text(str(response))
         except (LLMAgentError, OrchestrationError, InteractionTimeout, ValueError) as error:
             logger.exception("Task failed")
             await status.edit_text(f"❌ Task failed safely: {error}")
