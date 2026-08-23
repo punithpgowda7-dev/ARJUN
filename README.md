@@ -50,6 +50,8 @@ python -c "import asyncio; from config.settings import Settings; from agents.bas
 
 If this reports authentication failure, replace the key in the environment of the running cloud worker and restart it; changing only the laptop `.env` does not change an already deployed worker.
 
+`GITHUB_REPO` must remain in `owner/repository` form, for example `punithpgowda7-dev/ArjunAgent`. Arjun sends that exact slug to Vercel when creating a linked project. The Vercel GitHub App must be installed for the personal account or organization that owns the repository; a Vercel access token alone cannot grant Vercel access to a private GitHub repository.
+
 ### 2. Configure locally
 
 ```bash

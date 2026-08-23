@@ -8,6 +8,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 import httpx
 
@@ -127,7 +128,8 @@ class VercelService:
         if not self.settings.vercel_token:
             raise VercelError("Set VERCEL_TOKEN to enable automatic Vercel provisioning")
 
-        project_name = self._project_name(repository_name)
+        repository_slug = self._github_repository_slug(repository_name)
+        project_name = self._project_name(repository_slug)
         project_ref = (
             self.settings.vercel_project_id
             or self.settings.vercel_project_name
@@ -157,7 +159,8 @@ class VercelService:
                     "name": project_name,
                     "gitRepository": {
                         "type": "github",
-                        "repo": f"https://github.com/{repository_name}",
+                        # Vercel expects owner/repository here, not a GitHub URL.
+                        "repo": repository_slug,
                     },
                 },
             )
@@ -192,6 +195,25 @@ class VercelService:
         raw = repository_name.rsplit("/", 1)[-1].lower()
         normalized = re.sub(r"[^a-z0-9-]+", "-", raw).strip("-")
         return (normalized or "arjun-project")[:100]
+
+    @staticmethod
+    def _github_repository_slug(repository_name: str) -> str:
+        """Normalize a GitHub URL or full name to the Vercel owner/repository format."""
+        value = repository_name.strip().replace("\\", "/")
+        if value.startswith(("http://", "https://")):
+            parsed = urlparse(value)
+            if parsed.netloc.casefold() not in {"github.com", "www.github.com"}:
+                raise VercelError("GITHUB_REPO must point to github.com")
+            value = parsed.path.strip("/")
+        elif value.casefold().startswith("github.com/"):
+            value = value.split("/", 1)[1]
+        value = value.removesuffix(".git").strip("/")
+        parts = value.split("/")
+        if len(parts) != 2 or not all(parts):
+            raise VercelError(
+                "The GitHub repository is empty or malformed. Expected owner/repository."
+            )
+        return "/".join(part.strip() for part in parts)
 
     async def sync_environment(
         self,
