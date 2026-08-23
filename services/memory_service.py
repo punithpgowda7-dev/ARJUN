@@ -295,6 +295,22 @@ class MemoryService:
             sections.append("No previous verified memory exists for this repository.")
         return "\n\n".join(sections)[:20_000]
 
+    async def get_last_failed_task(self) -> str | None:
+        """Return the request text of the most recent failed or interrupted task, or None."""
+        return await asyncio.to_thread(self._get_last_failed_task)
+
+    def _get_last_failed_task(self) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT request FROM tasks
+                WHERE repository = ? AND status IN ('failed', 'running')
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (self.repository_name,),
+            ).fetchone()
+        return str(row["request"]) if row else None
+
     async def close(self) -> None:
         """Compatibility hook; connections are scoped to individual operations."""
 

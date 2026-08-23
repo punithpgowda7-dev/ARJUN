@@ -13,6 +13,7 @@ from agents.base import GeminiAgentError
 from agents.orchestrator import OrchestrationError, Orchestrator
 from config.settings import Settings
 from services.interaction_service import InteractionBroker, InteractionTimeout
+from services.memory_service import MemoryService
 from utils.audio import SpeechSynthesizer, VoiceTranscriber
 
 logger = logging.getLogger(__name__)
@@ -26,10 +27,13 @@ class TelegramHandler:
         settings: Settings,
         orchestrator: Orchestrator,
         voice_transcriber: VoiceTranscriber,
+        *,
+        memory: MemoryService | None = None,
     ) -> None:
         self.settings = settings
         self.orchestrator = orchestrator
         self.voice_transcriber = voice_transcriber
+        self.memory = memory
         self.interactions = InteractionBroker(settings.question_timeout_seconds)
 
     def is_authorized(self, update: Update) -> bool:
@@ -61,6 +65,15 @@ class TelegramHandler:
         request = (update.effective_message.text or "").strip()
         if await self._submit_pending_answer(update, request):
             return
+        # Detect "continue / resume / retry" so the user can restart a failed task.
+        if request.casefold() in {
+            "continue", "resume", "retry", "continue please",
+            "try again", "redo", "restart", "go", "go on",
+        }:
+            resumed = await self._resume_last_task(update)
+            if resumed:
+                return
+            # No failed task found — fall through and treat as normal request.
         await self._run_task(update, request)
 
     async def handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -212,3 +225,28 @@ class TelegramHandler:
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Log framework-level errors without leaking secrets to Telegram."""
         logger.error("Unhandled Telegram update error: %s", context.error, exc_info=context.error)
+
+    async def _resume_last_task(self, update: Update) -> bool:
+        """Look up and re-run the last failed or interrupted task. Returns True if found."""
+        message = update.effective_message
+        if message is None:
+            return False
+        if self.memory is None:
+            await message.reply_text(
+                "⚠️ No memory service is configured, so I cannot look up the last task.\n"
+                "Please send your full request again."
+            )
+            return True
+        last_request = await self.memory.get_last_failed_task()
+        if not last_request:
+            await message.reply_text(
+                "ℹ️ I could not find a previous failed or interrupted task to resume.\n"
+                "Please send your full request."
+            )
+            return True
+        await message.reply_text(
+            f"🔄 Resuming your last task:\n\n\"{last_request}\"\n\n"
+            "Starting fresh from the beginning with the same request..."
+        )
+        await self._run_task(update, last_request)
+        return True

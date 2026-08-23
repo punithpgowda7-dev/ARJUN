@@ -43,7 +43,7 @@ def build_application() -> tuple[Application, BaseAgent, GitHubService]:
         secrets,
         project_manager,
     )
-    handler = TelegramHandler(settings, orchestrator, VoiceTranscriber(base_agent))
+    handler = TelegramHandler(settings, orchestrator, VoiceTranscriber(base_agent), memory=memory)
 
     async def shutdown(_: Application) -> None:
         """Close external clients before the polling event loop exits."""
