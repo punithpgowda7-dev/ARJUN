@@ -65,7 +65,9 @@ class VercelService:
     _base_url = "https://api.vercel.com"
     _blocked_env_keys = {
         "TELEGRAM_BOT_TOKEN",
-        "GEMINI_API_KEY",
+        "LLM_API_KEY",
+        "LLM_MODEL",
+        "LLM_BASE_URL",
         "GITHUB_TOKEN",
         "VERCEL_TOKEN",
         "ARJUN_SECRET_KEY",

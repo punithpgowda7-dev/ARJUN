@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from io import BytesIO
 
-from agents.base import BaseAgent, GeminiAgentError
+from agents.base import BaseAgent, LLMAgentError
 
 
 class VoiceTranscriber:
@@ -20,7 +20,7 @@ class VoiceTranscriber:
                 audio_bytes,
                 "Transcribe this voice note and turn it into a concise developer instruction.",
             )
-        except GeminiAgentError:
+        except LLMAgentError:
             raise
         if not result.strip() or result.strip().upper() == "NO_SPEECH":
             return None

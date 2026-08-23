@@ -247,6 +247,10 @@ class ProjectManager:
                     repository=discovered_match.repository,
                     default_branch=discovered_match.default_branch,
                 )
+        if route.mode == "chat":
+            from agents.orchestrator import OrchestrationError
+            raise OrchestrationError(route.reason)
+            
         if route.mode == "existing":
             if record is None:
                 if ask_user is None:

@@ -14,8 +14,9 @@ class Settings(BaseModel):
 
     telegram_bot_token: str = Field(min_length=1)
     telegram_allowed_users: frozenset[int] = Field(min_length=1)
-    gemini_api_key: str = Field(min_length=1)
-    gemini_model: str = Field(default="gemini-2.5-flash", min_length=1)
+    llm_api_key: str = Field(min_length=1)
+    llm_model: str = Field(default="gpt-4o-mini", min_length=1)
+    llm_base_url: str | None = None
     github_token: str = Field(min_length=1)
     github_repo: str = Field(min_length=3)
     default_branch: str = Field(default="main", min_length=1)
@@ -95,8 +96,9 @@ class Settings(BaseModel):
         return cls(
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
             telegram_allowed_users=users,
-            gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+            llm_api_key=os.getenv("LLM_API_KEY", ""),
+            llm_model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+            llm_base_url=os.getenv("LLM_BASE_URL"),
             github_token=os.getenv("GITHUB_TOKEN", ""),
             github_repo=os.getenv("GITHUB_REPO", ""),
             default_branch=default_branch,
