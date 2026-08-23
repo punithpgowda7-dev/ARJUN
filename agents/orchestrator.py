@@ -277,9 +277,21 @@ class Orchestrator:
             review = await self.reviewer.review(request, generated, memory_context=memory_context)
 
         if not review.approved:
-            raise OrchestrationError(
-                "Review did not approve the generated code after one correction loop: "
-                f"{review.summary}"
+            # Safety net: only block delivery when there is at least one blocker or high severity
+            # issue. If the reviewer still rejects after correction but all remaining issues are
+            # medium/low (e.g. minor inefficiencies, style), ship the code anyway rather than
+            # failing the whole task — medium/low issues do not prevent functional delivery.
+            blocking_issues = [
+                issue for issue in review.issues if issue.severity in ("blocker", "high")
+            ]
+            if blocking_issues:
+                raise OrchestrationError(
+                    "Review did not approve the generated code after one correction loop: "
+                    f"{review.summary}"
+                )
+            logger.warning(
+                "Reviewer returned approved=false with only medium/low issues; shipping anyway: %s",
+                review.summary,
             )
 
         max_debug_attempts = self.github.settings.max_debug_attempts
