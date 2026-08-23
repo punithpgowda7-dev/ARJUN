@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import re
@@ -46,9 +47,24 @@ class BaseAgent:
         self._closed = True
 
     @staticmethod
+    def _is_output_limit_error(error: BaseException) -> bool:
+        text = str(error).lower()
+        return any(
+            marker in text
+            for marker in (
+                "max completion tokens",
+                "json_validate_failed",
+                "failed to generate json",
+                "ran out of completion tokens",
+            )
+        )
+
+    @staticmethod
     def _is_retryable(error: BaseException) -> bool:
         status = getattr(error, "status_code", None) or getattr(error, "code", None)
         text = str(error).lower()
+        if BaseAgent._is_output_limit_error(error):
+            return True
         return status in {408, 409, 425, 429, 500, 502, 503, 504} or any(
             marker in text
             for marker in ("429", "resource_exhausted", "rate limit", "temporarily unavailable")
@@ -87,6 +103,11 @@ class BaseAgent:
             return status, "LLM rate limit or free-tier quota reached. Wait and retry."
         if any(marker in text for marker in ("timeout", "timed out", "connection", "dns")):
             return status, "LLM could not be reached. Check the cloud worker network and retry."
+        if cls._is_output_limit_error(error):
+            return status, (
+                "LLM ran out of completion tokens before finishing valid JSON. "
+                "Retrying with a larger output budget."
+            )
         return status, f"LLM provider error ({status}): {text}"
 
     async def generate_text(
@@ -98,11 +119,14 @@ class BaseAgent:
         attempts: int = 4,
         response_mime_type: str | None = None,
         response_schema: Any = None,
+        max_tokens: int = 8192,
     ) -> str:
         """Generate text with exponential backoff and jitter for transient failures."""
         last_error: BaseException | None = None
-        
-        kwargs = {}
+        token_budget = max(256, max_tokens)
+        del response_schema
+
+        kwargs: dict[str, Any] = {}
         if response_mime_type == "application/json":
             kwargs["response_format"] = {"type": "json_object"}
 
@@ -131,10 +155,17 @@ class BaseAgent:
                     model=self.settings.llm_model,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=4096,
-                    **kwargs
+                    max_tokens=token_budget,
+                    **kwargs,
                 )
-                text = (response.choices[0].message.content or "").strip()
+                choice = response.choices[0]
+                text = (choice.message.content or "").strip()
+                finish_reason = getattr(choice, "finish_reason", None)
+                if finish_reason == "length":
+                    raise LLMAgentError(
+                        "LLM ran out of completion tokens before finishing the response",
+                        status_code=400,
+                    )
                 if not text:
                     raise LLMAgentError("LLM returned an empty response")
                 return text
@@ -142,6 +173,13 @@ class BaseAgent:
                 last_error = error
                 if attempt == attempts - 1 or not self._is_retryable(error):
                     break
+                if self._is_output_limit_error(error):
+                    token_budget = min(token_budget * 2, 32768)
+                    logger.warning(
+                        "LLM JSON/output truncated; retrying with max_tokens=%s",
+                        token_budget,
+                    )
+                    continue
                 delay = self._retry_delay(error, attempt)
                 logger.warning("Transient LLM error; retrying in %.2fs", delay)
                 await asyncio.sleep(delay)
@@ -161,23 +199,38 @@ class BaseAgent:
         system_instruction: str,
         response_model: type[ModelT],
         temperature: float = 0.1,
+        max_tokens: int = 8192,
     ) -> ModelT:
         """Generate, extract, and validate a JSON response against a Pydantic model."""
-        schema = response_model.model_json_schema()
-        schema_json = json.dumps(schema, indent=2)
+        schema_json = json.dumps(response_model.model_json_schema(), separators=(",", ":"))
         correction = ""
         last_error: BaseException | None = None
+        token_budget = max_tokens
         for attempt in range(3):
             instruction = (
-                f"{system_instruction}\n\nReturn only valid JSON matching this schema:\n{schema_json}"
+                f"{system_instruction}\n\n"
+                "Return a JSON object instance only, never the schema itself, never Markdown. "
+                f"Match this JSON Schema:\n{schema_json}"
                 f"{correction}"
             )
-            raw = await self.generate_text(
-                contents,
-                system_instruction=instruction,
-                temperature=temperature,
-                response_mime_type="application/json",
-            )
+            try:
+                raw = await self.generate_text(
+                    contents,
+                    system_instruction=instruction,
+                    temperature=temperature,
+                    response_mime_type="application/json",
+                    max_tokens=token_budget,
+                )
+            except LLMAgentError as error:
+                last_error = error
+                if attempt == 2 or not self._is_output_limit_error(error):
+                    raise
+                token_budget = min(token_budget * 2, 32768)
+                correction = (
+                    "\n\nThe previous response was truncated before it became valid JSON. "
+                    "Return a complete, compact JSON object with no extra commentary."
+                )
+                continue
             try:
                 return response_model.model_validate(parse_json_response(raw))
             except Exception as error:

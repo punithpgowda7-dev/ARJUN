@@ -55,6 +55,7 @@ class CoderAgent:
         return await self.base.generate_json(
             prompt,
             response_model=CoderOutput,
+            max_tokens=32768,
             system_instruction=(
                 "You are the Coder agent. Produce production-ready code for every planned "
                 "file. Return complete file contents, never diffs, snippets, ellipses, or "
