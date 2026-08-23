@@ -133,22 +133,44 @@ class BaseAgent:
     ) -> ModelT:
         """Generate, extract, and validate a JSON response against a Pydantic model."""
         schema = response_model.model_json_schema()
-        instruction = (
-            f"{system_instruction}\n\nReturn only valid JSON matching this schema:\n{schema}"
-        )
-        raw = await self.generate_text(
-            contents,
-            system_instruction=instruction,
-            temperature=temperature,
-            response_mime_type="application/json",
-            response_schema=response_model,
-        )
-        try:
-            return response_model.model_validate(parse_json_response(raw))
-        except Exception as error:
-            raise GeminiAgentError(
-                f"Gemini returned JSON that does not match {response_model.__name__}"
-            ) from error
+        correction = ""
+        last_error: BaseException | None = None
+        # A model can return syntactically valid JSON while missing a required
+        # field or using the wrong enum. Retry with the validation shape instead
+        # of aborting the entire Telegram task.
+        for attempt in range(3):
+            instruction = (
+                f"{system_instruction}\n\nReturn only valid JSON matching this schema:\n{schema}"
+                f"{correction}"
+            )
+            raw = await self.generate_text(
+                contents,
+                system_instruction=instruction,
+                temperature=temperature,
+                response_mime_type="application/json",
+                response_schema=response_model,
+            )
+            try:
+                return response_model.model_validate(parse_json_response(raw))
+            except Exception as error:
+                last_error = error
+                if attempt == 2:
+                    break
+                correction = (
+                    "\n\nThe previous JSON did not validate. Correct these validation "
+                    f"requirements and return the complete object again: {error}."
+                )
+                logger.warning(
+                    "Gemini structured response failed validation; retrying model=%s "
+                    "schema=%s attempt=%s",
+                    self.settings.gemini_model,
+                    response_model.__name__,
+                    attempt + 1,
+                )
+        raise GeminiAgentError(
+            f"Gemini returned JSON that does not match {response_model.__name__} "
+            "after 3 correction attempts"
+        ) from last_error
 
     async def generate_audio_text(self, audio_bytes: bytes, prompt: str) -> str:
         """Interpret an in-memory OGG voice note as a developer task."""
