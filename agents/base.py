@@ -131,6 +131,7 @@ class BaseAgent:
                     model=self.settings.llm_model,
                     messages=messages,
                     temperature=temperature,
+                    max_tokens=4096,
                     **kwargs
                 )
                 text = (response.choices[0].message.content or "").strip()
