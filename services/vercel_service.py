@@ -308,6 +308,11 @@ class VercelService:
             "name": repository_name.rsplit("/", 1)[-1],
             "project": self.settings.vercel_project_id,
             "target": target or self.settings.vercel_target,
+            # Vercel requires this object when the deployment API creates or
+            # initializes project settings. An empty object keeps framework
+            # detection enabled for Next.js, Vite, static HTML, and other
+            # stacks instead of hard-coding the wrong framework.
+            "projectSettings": {},
             "gitSource": {
                 "type": "github",
                 "repoId": str(repository_id),
@@ -315,7 +320,12 @@ class VercelService:
                 "sha": commit_sha,
             },
         }
-        created = await self._request("POST", "/v13/deployments", json=payload)
+        created = await self._request(
+            "POST",
+            "/v13/deployments",
+            params={"skipAutoDetectionConfirmation": "1"},
+            json=payload,
+        )
         deployment_id = str(created.get("id") or created.get("uid") or "")
         if not deployment_id:
             raise VercelError("Vercel did not return a deployment ID")

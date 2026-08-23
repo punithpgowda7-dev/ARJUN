@@ -298,15 +298,35 @@ class ProjectManager:
             repository = f"{owner}/{project_name}"
             existing = next((item for item in records if item.repository.casefold() == repository.casefold()), None)
             if existing is not None:
+                # A user may delete a repository outside Arjun. Do not let the
+                # durable registry turn that deleted identity into a permanent
+                # failure; verify it and recreate it when it is gone.
+                checker_settings = self.settings.model_copy(
+                    update={"github_repo": existing.repository}
+                )
+                checker = GitHubService(checker_settings)
+                try:
+                    await checker.verify_access()
+                except Exception:
+                    logger.info(
+                        "Registered repository is unavailable; recreating project repository=%s",
+                        existing.repository,
+                    )
+                    existing = None
+                finally:
+                    await checker.close()
+            if existing is not None:
                 record = existing
             else:
                 creator = GitHubService(self.settings)
-                created = await creator.create_repository(
-                    name=project_name,
-                    description="Created by Arjun from a Telegram development request",
-                    private=self.settings.github_new_repo_private,
-                )
-                await creator.close()
+                try:
+                    created = await creator.create_repository(
+                        name=project_name,
+                        description="Created by Arjun from a Telegram development request",
+                        private=self.settings.github_new_repo_private,
+                    )
+                finally:
+                    await creator.close()
                 record = await self.registry.register(
                     key=project_name,
                     repository=created.repository,
