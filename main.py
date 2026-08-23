@@ -73,6 +73,10 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # httpx logs full Telegram URLs at INFO, which would expose the bot token.
+    # Keep provider failures in our own sanitized handlers instead.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     application, base_agent, github = build_application()
     try:
         application.run_polling(allowed_updates=["message"])

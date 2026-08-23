@@ -165,9 +165,15 @@ class VercelService:
                 },
             )
         except VercelError as error:
+            logger.warning(
+                "Vercel rejected GitHub project linking: repository=%s status=%s",
+                repository_slug,
+                error.status_code,
+            )
             raise VercelError(
                 "Vercel project provisioning failed. Authorize the Vercel GitHub "
                 "integration for this repository, then retry. "
+                f"Repository sent to Vercel: {repository_slug}. "
                 f"Provider detail: {error}"
             ) from error
 
