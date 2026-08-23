@@ -78,6 +78,7 @@ class PlannerAgent:
         return await self.base.generate_json(
             prompt,
             response_model=TaskPlan,
+            max_tokens=2048,
             system_instruction=(
                 "You are the Planner agent in a production software repository. "
                 "Analyze the developer request and plan a complete implementation. "
@@ -103,7 +104,9 @@ class PlannerAgent:
                 "implementation notes. Select a practical technology stack compatible with "
                 "the repository and make acceptance criteria and test strategy executable. "
                 "Add technology_decisions only for genuinely material choices with two or more "
-                "reasonable options; never ask the user about trivial implementation details."
+                "reasonable options; never ask the user about trivial implementation details. "
+                "Keep the plan compact: at most 6 files for a simple/static site, short notes, "
+                "and empty technology_decisions unless a real choice exists."
             ),
         )
 
@@ -123,6 +126,7 @@ class PlannerAgent:
         return await self.base.generate_json(
             prompt,
             response_model=TechnologyDecisionResult,
+            max_tokens=512,
             system_instruction=(
                 "You are the architecture decision agent. Choose exactly one supplied option. "
                 "Compare compatibility with the current repository, security, operational "

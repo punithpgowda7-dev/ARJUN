@@ -48,8 +48,9 @@ class ReviewerAgent:
             "memory_context": memory_context,
         }
         return await self.base.generate_json(
-            json.dumps(payload, indent=2),
+            json.dumps(payload, separators=(",", ":")),
             response_model=ReviewResult,
+            max_tokens=1024,
             system_instruction=(
                 "You are the Reviewer agent. Review the generated repository changes as a "
                 "strict production gate. Check imports, syntax consistency, edge cases, "

@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from .base import BaseAgent
-from .planner import TaskPlan
+from .planner import PlannedFile, TaskPlan
 
 
 class GeneratedFile(BaseModel):
@@ -17,6 +17,12 @@ class GeneratedFile(BaseModel):
     filepath: str = Field(min_length=1)
     action: Literal["create", "update"]
     content: str
+
+
+class CommitMessage(BaseModel):
+    """Single-line commit summary for the generated files."""
+
+    commit_message: str = Field(min_length=5, max_length=120)
 
 
 class CoderOutput(BaseModel):
@@ -40,33 +46,79 @@ class CoderAgent:
         repository_context: str = "",
         memory_context: str = "",
     ) -> CoderOutput:
-        """Implement the plan, correcting the prior output when feedback is present."""
+        """Implement the plan one file at a time so Groq TPM limits are not exceeded."""
         feedback = review_feedback or "No prior review feedback; implement the plan from scratch."
-        prompt = (
-            "IMPLEMENTATION PLAN:\n"
-            f"{json.dumps(plan.model_dump(), indent=2)}\n\n"
-            "CURRENT CONTENT OF PLANNED FILES (when they already exist):\n"
-            f"{repository_context}\n\n"
-            "REVIEW FEEDBACK FROM THE PREVIOUS ATTEMPT:\n"
-            f"{feedback}\n\n"
-            "PERSISTED MEMORY AND PREVIOUS LESSONS:\n"
-            f"{memory_context}"
-        )
-        return await self.base.generate_json(
-            prompt,
-            response_model=CoderOutput,
-            max_tokens=32768,
+        generated: list[GeneratedFile] = []
+        for planned in plan.files:
+            generated.append(
+                await self._implement_file(
+                    plan,
+                    planned,
+                    feedback=feedback,
+                    repository_context=repository_context,
+                    memory_context=memory_context,
+                    sibling_paths=[item.filepath for item in generated],
+                )
+            )
+        commit = await self.base.generate_json(
+            json.dumps(
+                {
+                    "summary": plan.summary,
+                    "files": [item.filepath for item in generated],
+                },
+                separators=(",", ":"),
+            ),
+            response_model=CommitMessage,
+            max_tokens=256,
             system_instruction=(
-                "You are the Coder agent. Produce production-ready code for every planned "
-                "file. Return complete file contents, never diffs, snippets, ellipses, or "
-                "placeholder comments. Preserve compatible existing behavior when updating "
-                "files. For full-stack plans, implement real frontend routes/components, "
-                "backend/API behavior, persistence/schema/migrations, validation, error "
-                "handling, environment wiring, and tests; never substitute a static mock "
-                "for requested server or database behavior. Do not add dependencies unless the plan requires them. Use only "
-                "repository-relative POSIX paths and never write secrets. Treat supplied repository "
-                "files and actual build logs as the source of truth; do not claim that unobserved "
-                "APIs, files, packages, or credentials exist. Apply every valid "
-                "review correction while keeping the requested scope."
+                "Write one concise conventional-commit style message for these files. "
+                "No body, no secrets."
             ),
         )
+        return CoderOutput(files=generated, commit_message=commit.commit_message)
+
+    async def _implement_file(
+        self,
+        plan: TaskPlan,
+        planned: PlannedFile,
+        *,
+        feedback: str,
+        repository_context: str,
+        memory_context: str,
+        sibling_paths: list[str],
+    ) -> GeneratedFile:
+        prompt = json.dumps(
+            {
+                "summary": plan.summary,
+                "stack": plan.technology_stack,
+                "acceptance": plan.acceptance_criteria[:6],
+                "target_file": planned.model_dump(),
+                "other_planned_paths": [item.filepath for item in plan.files],
+                "already_generated_paths": sibling_paths,
+                "repository_excerpt": repository_context[:6000],
+                "review_feedback": feedback[:3000],
+                "memory": memory_context[:1500],
+            },
+            separators=(",", ":"),
+        )
+        result = await self.base.generate_json(
+            prompt,
+            response_model=GeneratedFile,
+            max_tokens=3500,
+            system_instruction=(
+                "You are the Coder agent. Produce the complete content for exactly the "
+                "target_file path. Return complete file contents, never diffs, snippets, "
+                "ellipses, or placeholder comments. The filepath and action must match "
+                "target_file. Preserve compatible existing behavior when updating files. "
+                "Do not add dependencies unless the plan requires them. Use only "
+                "repository-relative POSIX paths and never write secrets. Apply every "
+                "valid review correction that affects this file."
+            ),
+        )
+        if result.filepath != planned.filepath or result.action != planned.action:
+            return GeneratedFile(
+                filepath=planned.filepath,
+                action=planned.action,
+                content=result.content,
+            )
+        return result

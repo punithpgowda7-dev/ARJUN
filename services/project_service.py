@@ -229,14 +229,16 @@ class ProjectManager:
         catalog = "\n".join(
             f"- key={record.key}; repository={record.repository}; "
             f"vercel={record.vercel_project_name or 'auto-discover'}"
-            for record in records
+            for record in records[:20]
         )
         if available:
             catalog += "\n" + "\n".join(
                 f"- available_existing_key={item.repository.rsplit('/', 1)[-1]}; "
                 f"repository={item.repository}; vercel=auto-discover"
-                for item in available
+                for item in available[:20]
             )
+        if len(catalog) > 2500:
+            catalog = catalog[:2500] + "\n- (catalog truncated)"
         route = await self.router.route(request, catalog)
         record = self._find_record(route, records)
         if record is None:

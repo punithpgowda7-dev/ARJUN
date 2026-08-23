@@ -18,6 +18,9 @@ from utils.parser import parse_json_response
 
 logger = logging.getLogger(__name__)
 ModelT = TypeVar("ModelT", bound=BaseModel)
+# Groq on-demand TPM is often 8000 and counts prompt + reserved max_tokens.
+_DEFAULT_MAX_TOKENS = 1024
+_HARD_MAX_TOKENS = 4096
 
 
 class LLMAgentError(RuntimeError):
@@ -60,12 +63,36 @@ class BaseAgent:
         )
 
     @staticmethod
+    def _is_tpm_error(error: BaseException) -> bool:
+        status = getattr(error, "status_code", None) or getattr(error, "code", None)
+        text = str(error).lower()
+        if any(marker in text for marker in ("tokens per minute", "tpm:", "request too large")):
+            return True
+        return status in {413, 429} and "rate_limit_exceeded" in text
+
+    @staticmethod
+    def _tpm_budget(error: BaseException, current_budget: int) -> int:
+        """Shrink reserved completion tokens so prompt + max_tokens fits the TPM limit."""
+        text = str(error)
+        match = re.search(
+            r"limit\s+(\d+).{0,80}requested\s+(\d+)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if match is None:
+            return max(256, min(current_budget // 2, _HARD_MAX_TOKENS))
+        limit = int(match.group(1))
+        requested = int(match.group(2))
+        overflow = max(0, requested - limit)
+        return max(256, min(current_budget - overflow - 64, limit - 256, _HARD_MAX_TOKENS))
+
+    @staticmethod
     def _is_retryable(error: BaseException) -> bool:
         status = getattr(error, "status_code", None) or getattr(error, "code", None)
         text = str(error).lower()
-        if BaseAgent._is_output_limit_error(error):
+        if BaseAgent._is_output_limit_error(error) or BaseAgent._is_tpm_error(error):
             return True
-        return status in {408, 409, 425, 429, 500, 502, 503, 504} or any(
+        return status in {408, 409, 413, 425, 429, 500, 502, 503, 504} or any(
             marker in text
             for marker in ("429", "resource_exhausted", "rate limit", "temporarily unavailable")
         )
@@ -99,8 +126,13 @@ class BaseAgent:
             return status, (
                 "The configured LLM model or API endpoint was not found. Check LLM_MODEL."
             )
-        if status == 429 or any(marker in text for marker in ("quota", "resource_exhausted", "rate limit")):
-            return status, "LLM rate limit or free-tier quota reached. Wait and retry."
+        if cls._is_tpm_error(error) or status == 429 or any(
+            marker in text for marker in ("quota", "resource_exhausted", "rate limit")
+        ):
+            return status, (
+                "LLM token budget exceeded the provider TPM limit. "
+                "Retrying with a smaller reserved completion size."
+            )
         if any(marker in text for marker in ("timeout", "timed out", "connection", "dns")):
             return status, "LLM could not be reached. Check the cloud worker network and retry."
         if cls._is_output_limit_error(error):
@@ -119,11 +151,11 @@ class BaseAgent:
         attempts: int = 4,
         response_mime_type: str | None = None,
         response_schema: Any = None,
-        max_tokens: int = 8192,
+        max_tokens: int = _DEFAULT_MAX_TOKENS,
     ) -> str:
         """Generate text with exponential backoff and jitter for transient failures."""
         last_error: BaseException | None = None
-        token_budget = max(256, max_tokens)
+        token_budget = max(256, min(max_tokens, _HARD_MAX_TOKENS))
         del response_schema
 
         kwargs: dict[str, Any] = {}
@@ -173,8 +205,18 @@ class BaseAgent:
                 last_error = error
                 if attempt == attempts - 1 or not self._is_retryable(error):
                     break
+                if self._is_tpm_error(error):
+                    token_budget = self._tpm_budget(error, token_budget)
+                    delay = max(self._retry_delay(error, attempt), 8.0)
+                    logger.warning(
+                        "LLM TPM/request-too-large; retrying with max_tokens=%s after %.2fs",
+                        token_budget,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
                 if self._is_output_limit_error(error):
-                    token_budget = min(token_budget * 2, 32768)
+                    token_budget = min(token_budget * 2, _HARD_MAX_TOKENS)
                     logger.warning(
                         "LLM JSON/output truncated; retrying with max_tokens=%s",
                         token_budget,
@@ -199,18 +241,21 @@ class BaseAgent:
         system_instruction: str,
         response_model: type[ModelT],
         temperature: float = 0.1,
-        max_tokens: int = 8192,
+        max_tokens: int = _DEFAULT_MAX_TOKENS,
     ) -> ModelT:
         """Generate, extract, and validate a JSON response against a Pydantic model."""
-        schema_json = json.dumps(response_model.model_json_schema(), separators=(",", ":"))
+        contract = json.dumps(
+            {name: str(field.annotation) for name, field in response_model.model_fields.items()},
+            separators=(",", ":"),
+        )
         correction = ""
         last_error: BaseException | None = None
-        token_budget = max_tokens
+        token_budget = max(256, min(max_tokens, _HARD_MAX_TOKENS))
         for attempt in range(3):
             instruction = (
                 f"{system_instruction}\n\n"
-                "Return a JSON object instance only, never the schema itself, never Markdown. "
-                f"Match this JSON Schema:\n{schema_json}"
+                "Return a compact JSON object instance only, never the schema, never Markdown. "
+                f"Required keys and types: {contract}"
                 f"{correction}"
             )
             try:
@@ -223,14 +268,19 @@ class BaseAgent:
                 )
             except LLMAgentError as error:
                 last_error = error
-                if attempt == 2 or not self._is_output_limit_error(error):
+                if attempt == 2:
                     raise
-                token_budget = min(token_budget * 2, 32768)
-                correction = (
-                    "\n\nThe previous response was truncated before it became valid JSON. "
-                    "Return a complete, compact JSON object with no extra commentary."
-                )
-                continue
+                if self._is_tpm_error(error):
+                    token_budget = self._tpm_budget(error, token_budget)
+                    continue
+                if self._is_output_limit_error(error):
+                    token_budget = min(token_budget * 2, _HARD_MAX_TOKENS)
+                    correction = (
+                        "\n\nThe previous response was truncated before it became valid JSON. "
+                        "Return a complete, compact JSON object with no extra commentary."
+                    )
+                    continue
+                raise
             try:
                 return response_model.model_validate(parse_json_response(raw))
             except Exception as error:
