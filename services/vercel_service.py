@@ -304,10 +304,19 @@ class VercelService:
             raise VercelError(
                 "Vercel is not configured. Set VERCEL_TOKEN and provision a project."
             )
+        raw_target = target or self.settings.vercel_target
+        # Vercel API only accepts 'production' or 'staging' as target values.
+        # Any other value (e.g. 'preview') will cause a 400 error.
+        valid_targets = {"production", "staging"}
+        if raw_target not in valid_targets:
+            logger.warning(
+                "Invalid Vercel target %r; falling back to 'production'", raw_target
+            )
+            raw_target = "production"
         payload = {
             "name": repository_name.rsplit("/", 1)[-1],
             "project": self.settings.vercel_project_id,
-            "target": target or self.settings.vercel_target,
+            "target": raw_target,
             # Vercel requires this object when the deployment API creates or
             # initializes project settings. An empty object keeps framework
             # detection enabled for Next.js, Vite, static HTML, and other

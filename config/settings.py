@@ -25,7 +25,7 @@ class Settings(BaseModel):
     vercel_project_name: str = ""
     vercel_team_id: str = ""
     vercel_target: str = Field(default="production", min_length=1)
-    vercel_preview_target: str = Field(default="preview", min_length=1)
+    vercel_preview_target: str = Field(default="staging", min_length=1)
     vercel_auto_create_project: bool = True
     auto_promote_production: bool = True
     vercel_smoke_test_enabled: bool = True
@@ -106,7 +106,7 @@ class Settings(BaseModel):
             vercel_project_name=os.getenv("VERCEL_PROJECT_NAME", ""),
             vercel_team_id=os.getenv("VERCEL_TEAM_ID", ""),
             vercel_target=os.getenv("VERCEL_TARGET", "production"),
-            vercel_preview_target=os.getenv("VERCEL_PREVIEW_TARGET", "preview"),
+            vercel_preview_target=os.getenv("VERCEL_PREVIEW_TARGET", "staging"),
             vercel_auto_create_project=boolean("VERCEL_AUTO_CREATE_PROJECT", True),
             auto_promote_production=auto_promote,
             vercel_smoke_test_enabled=boolean("VERCEL_SMOKE_TEST_ENABLED", True),
