@@ -87,7 +87,7 @@ class BaseAgent:
             return status, "LLM rate limit or free-tier quota reached. Wait and retry."
         if any(marker in text for marker in ("timeout", "timed out", "connection", "dns")):
             return status, "LLM could not be reached. Check the cloud worker network and retry."
-        return status, "LLM returned an unexpected provider error. Check the worker logs for its error type."
+        return status, f"LLM provider error ({status}): {text}"
 
     async def generate_text(
         self,
