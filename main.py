@@ -62,6 +62,7 @@ def build_application() -> tuple[Application, BaseAgent, GitHubService]:
     application.add_handler(CommandHandler("start", handler.start))
     application.add_handler(CommandHandler("help", handler.start))
     application.add_handler(MessageHandler(filters.VOICE, handler.handle_voice))
+    application.add_handler(MessageHandler(filters.Document.ALL, handler.handle_document))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler.handle_text))
     application.add_error_handler(handler.error_handler)
     return application, base_agent, github

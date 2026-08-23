@@ -53,7 +53,7 @@ class TelegramHandler:
             await self._reject_unauthorized(update)
             return
         await update.effective_message.reply_text(
-            "⚡ Ultron is ready. Send a coding request as text or a Telegram voice note."
+            "⚡ Arjun is ready. Send a coding request as text, a voice note, or a .txt file."
         )
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -106,6 +106,45 @@ class TelegramHandler:
         except Exception:
             logger.exception("Unexpected voice handler failure")
             await status.edit_text("❌ I could not process that voice note. Please try again.")
+
+    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle .txt file uploads — read the file and treat its content as a coding request."""
+        if not self.is_authorized(update):
+            await self._reject_unauthorized(update)
+            return
+        message = update.effective_message
+        if message is None or message.document is None:
+            return
+        doc = message.document
+        mime = doc.mime_type or ""
+        # Only handle plain-text files
+        if mime not in {"text/plain", "application/octet-stream"} and not (
+            doc.file_name or ""
+        ).endswith(".txt"):
+            await message.reply_text(
+                "⚠️ I can only read .txt files. Please send your request as text or a .txt file."
+            )
+            return
+        status = await message.reply_text("📄 Reading your file...")
+        try:
+            file = await doc.get_file()
+            raw = await file.download_as_bytearray()
+            file_text = raw.decode("utf-8", errors="replace").strip()
+        except Exception:
+            logger.exception("Could not download document")
+            await status.edit_text("❌ I could not read the file. Please paste the text directly.")
+            return
+        # Combine caption (if any) with the file content
+        caption = (message.caption or "").strip()
+        if caption:
+            request = f"{caption}\n\n{file_text}"
+        else:
+            request = file_text
+        if not request.strip():
+            await status.edit_text("❌ The file appears to be empty. Please send a non-empty request.")
+            return
+        await status.edit_text(f"📄 Got your file ({len(file_text)} chars). Starting build...")
+        await self._run_task(update, request, status_message=status)
 
     async def _run_task(
         self,
