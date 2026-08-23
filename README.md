@@ -42,6 +42,14 @@ Commands sent while another build is running are queued per worker so two tasks 
 - Gemini: create a free-tier API key in [Google AI Studio](https://aistudio.google.com/apikey).
 - GitHub: create a personal access token with repository contents/write access for the target repository. A classic token needs the `repo` scope.
 
+For Gemini, `GEMINI_API_KEY` must be the API-key string copied from Google AI Studio. Do not paste a Google OAuth access token (`Bearer ...`), service-account JSON, or another service token into this variable. A safe connectivity check is:
+
+```bash
+python -c "import asyncio; from config.settings import Settings; from agents.base import BaseAgent; s=Settings.from_environment(); a=BaseAgent(s); print('Gemini:', asyncio.run(a.generate_text('Reply OK', system_instruction='Connectivity check', attempts=1))[:20]); asyncio.run(a.close())"
+```
+
+If this reports authentication failure, replace the key in the environment of the running cloud worker and restart it; changing only the laptop `.env` does not change an already deployed worker.
+
 ### 2. Configure locally
 
 ```bash

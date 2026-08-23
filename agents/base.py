@@ -22,6 +22,10 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 class GeminiAgentError(RuntimeError):
     """Raised when Gemini cannot produce a usable response."""
 
+    def __init__(self, message: str, *, status_code: int | str | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class BaseAgent:
     """Base class for agents with retrying text and multimodal generation."""
@@ -48,6 +52,33 @@ class BaseAgent:
             marker in text
             for marker in ("429", "resource_exhausted", "rate limit", "temporarily unavailable")
         )
+
+    @staticmethod
+    def _status_code(error: BaseException) -> int | str | None:
+        """Extract a provider status without printing provider response bodies."""
+        return getattr(error, "status_code", None) or getattr(error, "code", None)
+
+    @classmethod
+    def _safe_failure_detail(cls, error: BaseException) -> tuple[int | str | None, str]:
+        """Map provider failures to actionable, credential-safe Telegram text."""
+        status = cls._status_code(error)
+        text = str(error).lower()
+        if status in {401, 403} or "unauthenticated" in text or "authentication" in text:
+            return status, (
+                "Gemini authentication failed. Set GEMINI_API_KEY to a Google AI Studio API key "
+                "created at https://aistudio.google.com/apikey; do not use a Google OAuth access "
+                "token, service-account JSON, or the Telegram/GitHub/Vercel token."
+            )
+        if status == 404 or "not found" in text:
+            return status, (
+                "The configured Gemini model or API endpoint was not found. Check GEMINI_MODEL "
+                "and use a model available to this API key."
+            )
+        if status == 429 or any(marker in text for marker in ("quota", "resource_exhausted", "rate limit")):
+            return status, "Gemini rate limit or free-tier quota reached. Wait and retry."
+        if any(marker in text for marker in ("timeout", "timed out", "connection", "dns")):
+            return status, "Gemini could not be reached. Check the cloud worker network and retry."
+        return status, "Gemini returned an unexpected provider error. Check the worker logs for its error type."
 
     async def generate_text(
         self,
@@ -84,7 +115,13 @@ class BaseAgent:
                 delay = min(30.0, 2**attempt) + random.uniform(0.0, 0.75)
                 logger.warning("Transient Gemini error; retrying in %.2fs", delay)
                 await asyncio.sleep(delay)
-        raise GeminiAgentError("Gemini request failed") from last_error
+        status, detail = self._safe_failure_detail(last_error or RuntimeError("unknown provider error"))
+        logger.error(
+            "Gemini request failed after retries: error_type=%s status=%s",
+            type(last_error).__name__ if last_error else "unknown",
+            status,
+        )
+        raise GeminiAgentError(detail, status_code=status) from last_error
 
     async def generate_json(
         self,
