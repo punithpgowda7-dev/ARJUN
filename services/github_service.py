@@ -199,21 +199,29 @@ class GitHubService:
         """Create and initialize a repository under the configured GitHub owner."""
         owner, _ = self.settings.github_repo.split("/", 1)
         authenticated_user = self.client.get_user()
-        if authenticated_user.login.casefold() == owner.casefold():
-            repository = authenticated_user.create_repo(
-                name=name,
-                description=description[:350],
-                private=private,
-                auto_init=True,
-            )
-        else:
-            organization = self.client.get_organization(owner)
-            repository = organization.create_repo(
-                name=name,
-                description=description[:350],
-                private=private,
-                auto_init=True,
-            )
+        try:
+            if authenticated_user.login.casefold() == owner.casefold():
+                repository = authenticated_user.create_repo(
+                    name=name,
+                    description=description[:350],
+                    private=private,
+                    auto_init=True,
+                )
+            else:
+                organization = self.client.get_organization(owner)
+                repository = organization.create_repo(
+                    name=name,
+                    description=description[:350],
+                    private=private,
+                    auto_init=True,
+                )
+        except GithubException as exc:
+            # 422 "name already exists on this account" — the repo is already there.
+            # Fetch and reuse it instead of propagating the error.
+            if exc.status == 422:
+                repository = self.client.get_repo(f"{owner}/{name}")
+            else:
+                raise
         return GitHubRepositoryCreation(
             repository=repository.full_name,
             default_branch=repository.default_branch or self.settings.default_branch,

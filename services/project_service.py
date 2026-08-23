@@ -306,7 +306,7 @@ class ProjectManager:
                 )
                 checker = GitHubService(checker_settings)
                 try:
-                    await checker.verify_access()
+                    await checker.verify_connection()
                 except Exception:
                     logger.info(
                         "Registered repository is unavailable; recreating project repository=%s",
@@ -315,6 +315,24 @@ class ProjectManager:
                     existing = None
                 finally:
                     await checker.close()
+            # Also check freshly discovered GitHub repos (repos on GitHub but not yet in DB).
+            # Without this, requesting a project whose repo already exists on GitHub but is
+            # absent from the local registry causes a 422 "name already exists" from the API.
+            if existing is None:
+                discovered_match = next(
+                    (item for item in discovered if item.repository.casefold() == repository.casefold()),
+                    None,
+                )
+                if discovered_match is not None:
+                    logger.info(
+                        "Repository already exists on GitHub; registering without creation repository=%s",
+                        discovered_match.repository,
+                    )
+                    existing = await self.registry.register(
+                        key=project_name,
+                        repository=discovered_match.repository,
+                        default_branch=discovered_match.default_branch,
+                    )
             if existing is not None:
                 record = existing
             else:
