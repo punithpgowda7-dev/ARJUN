@@ -164,11 +164,12 @@ class BaseAgent:
     ) -> ModelT:
         """Generate, extract, and validate a JSON response against a Pydantic model."""
         schema = response_model.model_json_schema()
+        schema_json = json.dumps(schema, indent=2)
         correction = ""
         last_error: BaseException | None = None
         for attempt in range(3):
             instruction = (
-                f"{system_instruction}\n\nReturn only valid JSON matching this schema:\n{schema}"
+                f"{system_instruction}\n\nReturn only valid JSON matching this schema:\n{schema_json}"
                 f"{correction}"
             )
             raw = await self.generate_text(
