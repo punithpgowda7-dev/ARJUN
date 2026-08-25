@@ -71,10 +71,57 @@ class GitHubService:
                 raise
             return repo.get_branch(self.settings.default_branch)
 
-    def _repository_context(self) -> str:
-        """Return a bounded repository tree snapshot for architecture planning."""
+    async def _repository_context(self) -> str:
+        """Return a bounded repository tree snapshot or a Graphify architecture report."""
         repo = self._get_repository()
         branch = self._read_branch(repo)
+        
+        import tempfile
+        import shutil
+        import os
+        import asyncio
+        from github import GithubException
+        
+        # Try to use Graphify for massive-scale architectural awareness
+        graphify_cli = "graphify"
+        # Since we run inside a worker, fallback to tree if graphify isn't installed
+        has_graphify = shutil.which(graphify_cli) is not None
+        
+        if has_graphify:
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    # Shallow clone for analysis
+                    clone_url = f"https://oauth2:{self.settings.github_token}@github.com/{repo.full_name}.git"
+                    process = await asyncio.create_subprocess_exec(
+                        "git", "clone", "--depth", "1", "--branch", branch.name, clone_url, tmpdir,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                    )
+                    await process.communicate()
+                    
+                    if process.returncode == 0:
+                        # Extract AST
+                        ext = await asyncio.create_subprocess_exec(
+                            graphify_cli, "extract", "--code-only", tmpdir,
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                        )
+                        await ext.communicate()
+                        
+                        # Cluster & Generate Report
+                        cls = await asyncio.create_subprocess_exec(
+                            graphify_cli, "cluster-only", tmpdir,
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                        )
+                        await cls.communicate()
+                        
+                        report_path = os.path.join(tmpdir, "graphify-out", "GRAPH_REPORT.md")
+                        if os.path.exists(report_path):
+                            with open(report_path, "r", encoding="utf-8") as f:
+                                report_content = f.read()
+                            return f"Context branch: {branch.name}\n\n=== GRAPHIFY ARCHITECTURE REPORT ===\n{report_content}"
+            except Exception as e:
+                pass # Fallback to standard tree on failure
+                
+        # Fallback to standard Git Tree API (max 250 files)
         tree = repo.get_git_tree(branch.commit.sha, recursive=True)
         paths = [
             item.path
@@ -265,8 +312,8 @@ class GitHubService:
         return await asyncio.to_thread(self._list_accessible_repositories)
 
     async def repository_context(self) -> str:
-        """Fetch repository structure without changing remote state."""
-        return await asyncio.to_thread(self._repository_context)
+        """Fetch repository structure using Graphify or GitHub API."""
+        return await self._repository_context()
 
     async def file_context(self, paths: list[str]) -> str:
         """Fetch current contents for the files selected by the planner."""

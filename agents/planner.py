@@ -70,10 +70,43 @@ class PlannerAgent:
         memory_context: str = "",
     ) -> TaskPlan:
         """Create a plan with paths, purposes, logic, and acceptance criteria."""
+        
+        # New Brain Expansion Phase: Pre-planning investigation with Antigravity SDK
+        investigation_notes = ""
+        try:
+            from google.antigravity import Agent, LocalAgentConfig, CapabilitiesConfig
+            import logging
+            
+            # Spin up an Antigravity Agent with MCP tools for deep investigation
+            config = LocalAgentConfig(
+                system_instructions=(
+                    "You are an architecture investigator. Analyze the user request and repository context. "
+                    "Use your tools (like Figma MCP or sequential-thinking) to break down the problem. "
+                    "Output brief architectural notes to guide the JSON code generation phase."
+                ),
+                capabilities=CapabilitiesConfig()
+            )
+            async with Agent(config) as mcp_agent:
+                inv_prompt = f"REQUEST:\n{request}\n\nREPO:\n{repository_context}\n\nInvestigate and summarize key findings."
+                response = await mcp_agent.chat(inv_prompt)
+                
+                # Stream the response tokens
+                notes_chunks = []
+                async for token in response:
+                    notes_chunks.append(token)
+                investigation_notes = "".join(notes_chunks)
+        except ImportError:
+            pass # Fallback if google-antigravity SDK is not installed yet
+        except Exception as e:
+            # Log but don't block the build if MCP investigation fails
+            import logging
+            logging.getLogger(__name__).warning(f"MCP Investigation failed: {e}")
+
         prompt = (
             f"USER REQUEST:\n{request}\n\n"
             f"REPOSITORY CONTEXT:\n{repository_context}\n\n"
-            f"MEMORY CONTEXT:\n{memory_context}"
+            f"MEMORY CONTEXT:\n{memory_context}\n\n"
+            f"INVESTIGATION NOTES (MCP):\n{investigation_notes}"
         )
         return await self.base.generate_json(
             prompt,

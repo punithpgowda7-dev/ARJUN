@@ -1,8 +1,32 @@
+# Secrets & Environment
 .env
+.env.*
+!.env.example
+
+# Arjun Local State & Encrypted DB
+data/
+*.sqlite3
+*.db
+
+# Python & Virtual Environments
+venv/
 .venv/
+env/
 __pycache__/
 *.py[cod]
+*$py.class
 *.log
+
+# Testing & Linting Caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Graphify & Node / MCP artifacts
+.graphify/
+node_modules/
+npm-debug.log*
+
+# OS Specific
+.DS_Store
+Thumbs.db
