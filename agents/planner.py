@@ -77,14 +77,17 @@ class PlannerAgent:
             from google.antigravity import Agent, LocalAgentConfig, CapabilitiesConfig
             import logging
             
+            import os
+            
             # Spin up an Antigravity Agent with MCP tools for deep investigation
+            mcp_path = os.path.join(os.getcwd(), "mcp_config.json")
             config = LocalAgentConfig(
                 system_instructions=(
                     "You are an architecture investigator. Analyze the user request and repository context. "
                     "Use your tools (like Figma MCP or sequential-thinking) to break down the problem. "
                     "Output brief architectural notes to guide the JSON code generation phase."
                 ),
-                capabilities=CapabilitiesConfig()
+                capabilities=CapabilitiesConfig(mcp_config_path=mcp_path if os.path.exists(mcp_path) else None)
             )
             async with Agent(config) as mcp_agent:
                 inv_prompt = f"REQUEST:\n{request}\n\nREPO:\n{repository_context}\n\nInvestigate and summarize key findings."
