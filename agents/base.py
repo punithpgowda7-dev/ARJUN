@@ -137,16 +137,22 @@ class BaseAgent:
 
     @staticmethod
     def _retry_delay(error: BaseException, attempt: int) -> float:
-        fallback = min(30.0, 2**attempt) + random.uniform(0.0, 0.75)
         text = str(error)
         match = re.search(
-            r"(?:retry(?:\s+after)?|retryDelay)\D{0,20}(\d+(?:\.\d+)?)\s*s",
+            r"(?:retry(?:\s+after)?|retryDelay|try\s+again\s+in|wait\s+for|in\s+)\D{0,20}(\d+(?:\.\d+)?)\s*s",
             text,
             flags=re.IGNORECASE,
         )
-        if match is None:
-            return fallback
-        return min(60.0, max(fallback, float(match.group(1))))
+        if match is not None:
+            parsed_delay = float(match.group(1)) + random.uniform(0.5, 2.0)
+            return min(60.0, max(parsed_delay, 10.0))
+        
+        is_rate_limit = BaseAgent._is_tpm_error(error) or "429" in text or "rate limit" in text.lower()
+        if is_rate_limit:
+            return min(60.0, 12.0 + attempt * 5.0 + random.uniform(0.0, 2.0))
+            
+        fallback = min(30.0, 2**attempt) + random.uniform(0.0, 0.75)
+        return fallback
 
     @classmethod
     def _safe_failure_detail(cls, error: BaseException) -> tuple[int | str | None, str]:

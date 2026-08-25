@@ -58,7 +58,7 @@ class ProjectRouterAgent:
                 indent=2,
             ),
             response_model=ProjectRoute,
-            max_tokens=512,
+            max_tokens=256,
             system_instruction=(
                 "You are Arjun's project router. Decide whether the user wants a NEW project, "
                 "an EXISTING registered project, or is just making CHAT conversation. "
