@@ -108,9 +108,11 @@ class PlannerAgent:
         prompt = (
             f"USER REQUEST:\n{request}\n\n"
             f"REPOSITORY CONTEXT:\n{repository_context}\n\n"
-            f"MEMORY CONTEXT:\n{memory_context}\n\n"
-            f"INVESTIGATION NOTES (MCP):\n{investigation_notes}"
+            f"MEMORY CONTEXT:\n{memory_context}"
         )
+        if investigation_notes.strip():
+            prompt += f"\n\nINVESTIGATION NOTES (MCP):\n{investigation_notes}"
+            
         return await self.base.generate_json(
             prompt,
             response_model=TaskPlan,
