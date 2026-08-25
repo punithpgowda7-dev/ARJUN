@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Literal
 
@@ -92,7 +93,9 @@ class CoderAgent:
         """Implement the plan one file at a time so Groq TPM limits are not exceeded."""
         feedback = review_feedback or "No prior review feedback; implement the plan from scratch."
         generated: list[GeneratedFile] = []
-        for planned in plan.files:
+        for i, planned in enumerate(plan.files):
+            if i > 0:
+                await asyncio.sleep(2.0)
             generated.append(
                 await self._implement_file(
                     plan,

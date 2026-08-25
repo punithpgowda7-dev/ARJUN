@@ -108,17 +108,25 @@ class BaseAgent:
     def _tpm_budget(error: BaseException, current_budget: int) -> int:
         """Shrink reserved completion tokens so prompt + max_tokens fits the TPM limit."""
         text = str(error)
-        match = re.search(
-            r"limit\s+(\d+).{0,80}requested\s+(\d+)",
-            text,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if match is None:
-            return max(256, min(current_budget // 2, _HARD_MAX_TOKENS))
-        limit = int(match.group(1))
-        requested = int(match.group(2))
-        overflow = max(0, requested - limit)
-        return max(256, min(current_budget - overflow - 64, limit - 256, _HARD_MAX_TOKENS))
+        m_limit = re.search(r"Limit\s+(\d+)", text, re.IGNORECASE)
+        m_used = re.search(r"Used\s+(\d+)", text, re.IGNORECASE)
+        m_req = re.search(r"Requested\s+(\d+)", text, re.IGNORECASE)
+        
+        if m_limit and m_used:
+            limit = int(m_limit.group(1))
+            used = int(m_used.group(1))
+            available = limit - used
+            if available > 300:
+                return max(256, min(current_budget, available - 64))
+            return max(256, current_budget // 2)
+            
+        if m_limit and m_req:
+            limit = int(m_limit.group(1))
+            req = int(m_req.group(1))
+            overflow = max(0, req - limit)
+            return max(256, min(current_budget - overflow - 64, limit - 256))
+            
+        return max(256, current_budget // 2)
 
     @staticmethod
     def _is_retryable(error: BaseException) -> bool:
@@ -139,17 +147,16 @@ class BaseAgent:
     def _retry_delay(error: BaseException, attempt: int) -> float:
         text = str(error)
         match = re.search(
-            r"(?:retry(?:\s+after)?|retryDelay|try\s+again\s+in|wait\s+for|in\s+)\D{0,20}(\d+(?:\.\d+)?)\s*s",
+            r"(?:try\s+again\s+in|retry\s+after|retrydelay|wait\s+for|in\s+)\D{0,10}(\d+(?:\.\d+)?)\s*s",
             text,
             flags=re.IGNORECASE,
         )
         if match is not None:
-            parsed_delay = float(match.group(1)) + random.uniform(0.5, 2.0)
-            return min(60.0, max(parsed_delay, 10.0))
+            return float(match.group(1)) + random.uniform(1.5, 3.0)
         
         is_rate_limit = BaseAgent._is_tpm_error(error) or "429" in text or "rate limit" in text.lower()
         if is_rate_limit:
-            return min(60.0, 12.0 + attempt * 5.0 + random.uniform(0.0, 2.0))
+            return min(60.0, 15.0 + attempt * 5.0 + random.uniform(0.5, 2.0))
             
         fallback = min(30.0, 2**attempt) + random.uniform(0.0, 0.75)
         return fallback
@@ -188,7 +195,7 @@ class BaseAgent:
         *,
         system_instruction: str,
         temperature: float = 0.2,
-        attempts: int = 6,
+        attempts: int = 8,
         response_mime_type: str | None = None,
         response_schema: Any = None,
         max_tokens: int = _DEFAULT_MAX_TOKENS,
