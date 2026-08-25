@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .base import BaseAgent
 from .planner import PlannedFile, TaskPlan
@@ -15,21 +15,64 @@ class GeneratedFile(BaseModel):
     """A complete repository file emitted by the coder."""
 
     filepath: str = Field(min_length=1)
-    action: Literal["create", "update"]
-    content: str
+    action: Literal["create", "update"] = "update"
+    content: str = ""
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _normalize_action(cls, v: Any) -> str:
+        if not isinstance(v, str):
+            return "update"
+        v_lower = v.strip().lower()
+        if v_lower in {"create", "new", "add", "created", "added"}:
+            return "create"
+        return "update"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_generated_file(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "filepath" not in data or not data["filepath"]:
+                for alt in ("path", "file", "filename", "name", "file_path", "target_file"):
+                    if alt in data and data[alt]:
+                        data["filepath"] = str(data[alt])
+                        break
+            if "content" not in data:
+                for alt in ("code", "file_content", "body", "source"):
+                    if alt in data:
+                        data["content"] = str(data[alt])
+                        break
+                if "content" not in data:
+                    data["content"] = ""
+        return data
 
 
 class CommitMessage(BaseModel):
     """Single-line commit summary for the generated files."""
 
-    commit_message: str = Field(min_length=5, max_length=120)
+    commit_message: str = Field(min_length=3, max_length=150, default="feat: implement requested code changes")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_commit(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            return {"commit_message": data}
+        if isinstance(data, dict):
+            if "commit_message" not in data:
+                for alt in ("message", "commit", "summary", "title"):
+                    if alt in data and data[alt]:
+                        data["commit_message"] = str(data[alt])
+                        break
+                if "commit_message" not in data:
+                    data["commit_message"] = "feat: implement requested code changes"
+        return data
 
 
 class CoderOutput(BaseModel):
     """Structured code changes and the single commit message."""
 
     files: list[GeneratedFile] = Field(min_length=1)
-    commit_message: str = Field(min_length=5, max_length=120)
+    commit_message: str = Field(min_length=3, max_length=150, default="feat: implement requested code changes")
 
 
 class CoderAgent:

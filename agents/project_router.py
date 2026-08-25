@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .base import BaseAgent
 
@@ -13,10 +13,32 @@ from .base import BaseAgent
 class ProjectRoute(BaseModel):
     """LLM classification of the requested project target."""
 
-    mode: Literal["new", "existing", "chat"]
+    mode: Literal["new", "existing", "chat"] = "existing"
     project_key: str = Field(default="", max_length=120)
     project_name: str = Field(default="", max_length=120)
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str = Field(default="Routed request", max_length=500)
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _normalize_mode(cls, v: Any) -> str:
+        if not isinstance(v, str):
+            return "existing"
+        v_lower = v.strip().lower()
+        if v_lower in {"new", "create", "fresh"}:
+            return "new"
+        if v_lower in {"chat", "conversation", "question"}:
+            return "chat"
+        return "existing"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_route(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "mode" not in data:
+                data["mode"] = "existing"
+            if "reason" not in data:
+                data["reason"] = "Routed request"
+        return data
 
 
 class ProjectRouterAgent:

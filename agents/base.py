@@ -244,18 +244,17 @@ class BaseAgent:
         max_tokens: int = _DEFAULT_MAX_TOKENS,
     ) -> ModelT:
         """Generate, extract, and validate a JSON response against a Pydantic model."""
-        contract = json.dumps(
-            {name: str(field.annotation) for name, field in response_model.model_fields.items()},
-            separators=(",", ":"),
-        )
+        schema_dict = response_model.model_json_schema()
+        schema_json = json.dumps(schema_dict, indent=2)
         correction = ""
         last_error: BaseException | None = None
         token_budget = max(256, min(max_tokens, _HARD_MAX_TOKENS))
         for attempt in range(3):
             instruction = (
                 f"{system_instruction}\n\n"
-                "Return a compact JSON object instance only, never the schema, never Markdown. "
-                f"Required keys and types: {contract}"
+                "CRITICAL OUTPUT INSTRUCTION: You MUST return a single valid JSON object instance matching this JSON Schema.\n"
+                "Do NOT wrap with Markdown code fences, do NOT include explanations, return ONLY the raw JSON object.\n\n"
+                f"Required JSON Schema:\n{schema_json}"
                 f"{correction}"
             )
             try:
@@ -282,25 +281,28 @@ class BaseAgent:
                     continue
                 raise
             try:
-                return response_model.model_validate(parse_json_response(raw))
+                parsed = parse_json_response(raw)
+                return response_model.model_validate(parsed)
             except Exception as error:
                 last_error = error
                 if attempt == 2:
                     break
                 correction = (
-                    "\n\nThe previous JSON did not validate. Correct these validation "
-                    f"requirements and return the complete object again: {error}."
+                    "\n\nThe previous JSON did not validate against the required schema. Correct these validation "
+                    f"errors and return the complete JSON object again: {error}."
                 )
                 logger.warning(
                     "LLM structured response failed validation; retrying model=%s "
-                    "schema=%s attempt=%s",
+                    "schema=%s attempt=%s error=%s raw_excerpt=%s",
                     self.settings.llm_model,
                     response_model.__name__,
                     attempt + 1,
+                    error,
+                    raw[:200] if "raw" in locals() else "N/A",
                 )
         raise LLMAgentError(
             f"LLM returned JSON that does not match {response_model.__name__} "
-            "after 3 correction attempts"
+            f"after 3 correction attempts: {last_error}"
         ) from last_error
 
     async def generate_audio_text(self, audio_bytes: bytes, prompt: str) -> str:

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .base import BaseAgent
 
@@ -14,9 +14,47 @@ class PlannedFile(BaseModel):
     """One file in the requested implementation plan."""
 
     filepath: str = Field(min_length=1)
-    action: Literal["create", "update"]
-    purpose: str = Field(min_length=1)
+    action: Literal["create", "update"] = "update"
+    purpose: str = Field(default="Update file logic")
     implementation_notes: list[str] = Field(default_factory=list)
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _normalize_action(cls, v: Any) -> str:
+        if not isinstance(v, str):
+            return "update"
+        v_lower = v.strip().lower()
+        if v_lower in {"create", "new", "add", "created", "added"}:
+            return "create"
+        return "update"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_planned_file(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            return {
+                "filepath": data,
+                "action": "update",
+                "purpose": "Update file",
+                "implementation_notes": [],
+            }
+        if isinstance(data, dict):
+            # Resolve filepath aliases
+            if "filepath" not in data or not data["filepath"]:
+                for alt in ("path", "file", "filename", "name", "file_path", "target_file"):
+                    if alt in data and data[alt]:
+                        data["filepath"] = str(data[alt])
+                        break
+            if "purpose" not in data or not data["purpose"]:
+                for alt in ("description", "desc", "reason", "summary", "notes", "goal"):
+                    if alt in data and data[alt]:
+                        data["purpose"] = str(data[alt])
+                        break
+                if "purpose" not in data or not data["purpose"]:
+                    data["purpose"] = "Implement requested changes"
+            if "implementation_notes" in data and isinstance(data["implementation_notes"], str):
+                data["implementation_notes"] = [data["implementation_notes"]]
+        return data
 
 
 class EnvironmentRequirement(BaseModel):
@@ -39,14 +77,45 @@ class TechnologyDecision(BaseModel):
 class TaskPlan(BaseModel):
     """Structured architecture plan produced before code generation."""
 
-    summary: str = Field(min_length=1)
+    summary: str = Field(default="Execute requested code changes")
     files: list[PlannedFile] = Field(min_length=1)
-    acceptance_criteria: list[str] = Field(min_length=1)
+    acceptance_criteria: list[str] = Field(default_factory=lambda: ["Fulfill user request"])
     risks: list[str] = Field(default_factory=list)
     technology_stack: list[str] = Field(default_factory=list)
     test_strategy: list[str] = Field(default_factory=list)
     environment_variables: list[EnvironmentRequirement] = Field(default_factory=list)
     technology_decisions: list[TechnologyDecision] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_task_plan(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "summary" not in data or not data["summary"]:
+                for alt in ("plan", "description", "overview", "title", "task"):
+                    if alt in data and data[alt]:
+                        data["summary"] = str(data[alt])
+                        break
+                if "summary" not in data or not data["summary"]:
+                    data["summary"] = "Execute requested code changes"
+            if "files" not in data or not data["files"]:
+                for alt in ("planned_files", "changed_files", "file_list", "file_changes", "target_files"):
+                    if alt in data and data[alt]:
+                        data["files"] = data[alt]
+                        break
+            if "acceptance_criteria" in data:
+                if isinstance(data["acceptance_criteria"], str):
+                    data["acceptance_criteria"] = [data["acceptance_criteria"]]
+            else:
+                data["acceptance_criteria"] = ["Code changes fulfill the developer request safely"]
+            if not data.get("acceptance_criteria"):
+                data["acceptance_criteria"] = ["Code changes fulfill the developer request safely"]
+            if "technology_stack" in data and isinstance(data["technology_stack"], str):
+                data["technology_stack"] = [data["technology_stack"]]
+            if "test_strategy" in data and isinstance(data["test_strategy"], str):
+                data["test_strategy"] = [data["test_strategy"]]
+            if "risks" in data and isinstance(data["risks"], str):
+                data["risks"] = [data["risks"]]
+        return data
 
 
 class TechnologyDecisionResult(BaseModel):
