@@ -72,19 +72,36 @@ class GitHubService:
             return repo.get_branch(self.settings.default_branch)
 
     async def _repository_context(self) -> str:
-        """Return a bounded repository tree snapshot or a Graphify architecture report."""
+        """Return a bounded repository tree snapshot and optionally a Graphify architecture report."""
         repo = self._get_repository()
         branch = self._read_branch(repo)
         
+        # Always get the standard file list for exact file paths
+        tree = repo.get_git_tree(branch.commit.sha, recursive=True)
+        paths = [
+            item.path
+            for item in tree.tree
+            if item.type == "blob" and item.path
+        ][:250]
+        
+        suffix = "\n... (tree truncated at 250 files)" if len(tree.tree) > 250 else ""
+        standard_context = (
+            f"Context branch: {branch.name}\n"
+            "Existing repository files:\n"
+            + "\n".join(f"- {path}" for path in paths)
+            + suffix
+        )
+        
+        # Only use Graphify if the repository is large enough to need architectural clustering
+        if len(tree.tree) < 20:
+            return standard_context
+            
         import tempfile
         import shutil
         import os
         import asyncio
-        from github import GithubException
         
-        # Try to use Graphify for massive-scale architectural awareness
         graphify_cli = "graphify"
-        # Since we run inside a worker, fallback to tree if graphify isn't installed
         has_graphify = shutil.which(graphify_cli) is not None
         
         if has_graphify:
@@ -99,14 +116,12 @@ class GitHubService:
                     await process.communicate()
                     
                     if process.returncode == 0:
-                        # Extract AST
                         ext = await asyncio.create_subprocess_exec(
                             graphify_cli, "extract", "--code-only", tmpdir,
                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
                         )
                         await ext.communicate()
                         
-                        # Cluster & Generate Report
                         cls = await asyncio.create_subprocess_exec(
                             graphify_cli, "cluster-only", tmpdir,
                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -117,24 +132,11 @@ class GitHubService:
                         if os.path.exists(report_path):
                             with open(report_path, "r", encoding="utf-8") as f:
                                 report_content = f.read()
-                            return f"Context branch: {branch.name}\n\n=== GRAPHIFY ARCHITECTURE REPORT ===\n{report_content}"
-            except Exception as e:
-                pass # Fallback to standard tree on failure
+                            return f"{standard_context}\n\n=== GRAPHIFY ARCHITECTURE REPORT ===\n{report_content}"
+            except Exception:
+                pass 
                 
-        # Fallback to standard Git Tree API (max 250 files)
-        tree = repo.get_git_tree(branch.commit.sha, recursive=True)
-        paths = [
-            item.path
-            for item in tree.tree
-            if item.type == "blob" and item.path
-        ][:250]
-        suffix = "\n... (tree truncated at 250 files)" if len(tree.tree) > 250 else ""
-        return (
-            f"Context branch: {branch.name}\n"
-            "Existing repository files:\n"
-            + "\n".join(f"- {path}" for path in paths)
-            + suffix
-        )
+        return standard_context
 
     def _file_context(self, paths: list[str]) -> str:
         """Read only planned text files and cap each snapshot sent to the model."""
