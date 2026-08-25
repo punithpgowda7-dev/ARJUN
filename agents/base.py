@@ -31,6 +31,40 @@ class LLMAgentError(RuntimeError):
         self.status_code = status_code
 
 
+def compact_model_schema(model: type[BaseModel]) -> str:
+    """Generate a minimal, token-efficient JSON template for LLM structured output."""
+    schema = model.model_json_schema()
+    defs = schema.get("$defs", {})
+
+    def resolve_field(field_schema: dict) -> Any:
+        if "$ref" in field_schema:
+            ref_name = field_schema["$ref"].split("/")[-1]
+            if ref_name in defs:
+                return resolve_obj(defs[ref_name])
+            return ref_name
+        ftype = field_schema.get("type", "string")
+        if ftype == "array":
+            items = field_schema.get("items", {})
+            return [resolve_field(items)]
+        if ftype == "object":
+            return resolve_obj(field_schema)
+        if "enum" in field_schema:
+            return " | ".join(f'"{e}"' for e in field_schema["enum"])
+        return ftype
+
+    def resolve_obj(obj_schema: dict) -> dict:
+        result = {}
+        for prop_name, prop_val in obj_schema.get("properties", {}).items():
+            result[prop_name] = resolve_field(prop_val)
+        return result
+
+    try:
+        template = resolve_obj(schema)
+        return json.dumps(template, indent=2)
+    except Exception:
+        return json.dumps(schema, separators=(",", ":"))
+
+
 class BaseAgent:
     """Base class for agents with retrying text and multimodal generation."""
 
@@ -148,7 +182,7 @@ class BaseAgent:
         *,
         system_instruction: str,
         temperature: float = 0.2,
-        attempts: int = 4,
+        attempts: int = 6,
         response_mime_type: str | None = None,
         response_schema: Any = None,
         max_tokens: int = _DEFAULT_MAX_TOKENS,
@@ -206,8 +240,8 @@ class BaseAgent:
                 if attempt == attempts - 1 or not self._is_retryable(error):
                     break
                 if self._is_tpm_error(error):
-                    token_budget = self._tpm_budget(error, token_budget)
-                    delay = max(self._retry_delay(error, attempt), 8.0)
+                    token_budget = max(256, self._tpm_budget(error, token_budget))
+                    delay = max(self._retry_delay(error, attempt), 10.0 + attempt * 4.0)
                     logger.warning(
                         "LLM TPM/request-too-large; retrying with max_tokens=%s after %.2fs",
                         token_budget,
@@ -244,17 +278,16 @@ class BaseAgent:
         max_tokens: int = _DEFAULT_MAX_TOKENS,
     ) -> ModelT:
         """Generate, extract, and validate a JSON response against a Pydantic model."""
-        schema_dict = response_model.model_json_schema()
-        schema_json = json.dumps(schema_dict, indent=2)
+        schema_json = compact_model_schema(response_model)
         correction = ""
         last_error: BaseException | None = None
         token_budget = max(256, min(max_tokens, _HARD_MAX_TOKENS))
         for attempt in range(3):
             instruction = (
                 f"{system_instruction}\n\n"
-                "CRITICAL OUTPUT INSTRUCTION: You MUST return a single valid JSON object instance matching this JSON Schema.\n"
-                "Do NOT wrap with Markdown code fences, do NOT include explanations, return ONLY the raw JSON object.\n\n"
-                f"Required JSON Schema:\n{schema_json}"
+                "CRITICAL OUTPUT INSTRUCTION: Return a single compact JSON object strictly matching this template format.\n"
+                "Do NOT wrap in Markdown code blocks, do NOT include explanations, return ONLY raw JSON.\n\n"
+                f"JSON Template:\n{schema_json}"
                 f"{correction}"
             )
             try:

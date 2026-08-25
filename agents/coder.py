@@ -138,16 +138,16 @@ class CoderAgent:
                 "target_file": planned.model_dump(),
                 "other_planned_paths": [item.filepath for item in plan.files],
                 "already_generated_paths": sibling_paths,
-                "repository_excerpt": repository_context[:6000],
-                "review_feedback": feedback[:3000],
-                "memory": memory_context[:1500],
+                "repository_excerpt": repository_context[:3500],
+                "review_feedback": feedback[:1500],
+                "memory": memory_context[:500],
             },
             separators=(",", ":"),
         )
         result = await self.base.generate_json(
             prompt,
             response_model=GeneratedFile,
-            max_tokens=3500,
+            max_tokens=2500,
             system_instruction=(
                 "You are the Coder agent. Produce the complete content for exactly the "
                 "target_file path. Return complete file contents, never diffs, snippets, "

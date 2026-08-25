@@ -185,7 +185,7 @@ class PlannerAgent:
         return await self.base.generate_json(
             prompt,
             response_model=TaskPlan,
-            max_tokens=2048,
+            max_tokens=1024,
             system_instruction=(
                 "You are the Planner agent in a production software repository. "
                 "Analyze the developer request and plan a complete implementation. "
