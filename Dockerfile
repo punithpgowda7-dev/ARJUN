@@ -22,13 +22,15 @@ RUN apt-get update && apt-get install -y git curl && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @modelcontextprotocol/server-sequential-thinking
+RUN npm install -g @modelcontextprotocol/server-sequential-thinking omniroute
 
 WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY . .
 
+RUN chmod +x start.sh
+
 # Mount this directory to durable cloud storage so lessons survive restarts.
 VOLUME ["/app/data"]
 
-CMD ["python", "main.py"]
+CMD ["./start.sh"]
