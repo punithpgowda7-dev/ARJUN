@@ -74,6 +74,17 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # Start a dummy HTTP server so Render "Web Service" health checks pass
+    import os
+    import threading
+    from http.server import HTTPServer, SimpleHTTPRequestHandler
+    port = int(os.environ.get("PORT", 8080))
+    threading.Thread(
+        target=lambda: HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler).serve_forever(),
+        daemon=True
+    ).start()
+
     # httpx logs full Telegram URLs at INFO, which would expose the bot token.
     # Keep provider failures in our own sanitized handlers instead.
     logging.getLogger("httpx").setLevel(logging.WARNING)
