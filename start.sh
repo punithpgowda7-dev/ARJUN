@@ -4,8 +4,15 @@
 echo "Starting OmniRoute AI Gateway..."
 omniroute > omniroute.log 2>&1 &
 
+# Continuously print the proxy logs to Render's console
+tail -f omniroute.log &
+
 # Wait 10 seconds for OmniRoute to initialize on port 20128 (free tier can be slow)
 sleep 10
+
+# Test if the LLM proxy is actually listening!
+echo "Testing OmniRoute connection..."
+curl -v http://127.0.0.1:20128/v1/models || echo "CURL FAILED"
 
 # Start the Arjun bot
 echo "Starting Arjun..."
